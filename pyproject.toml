@@ -12,4 +12,5 @@ dependencies = [
     "fastapi[standard]>=0.116.1",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
+    "certifi>=2024.8.30",
 ]

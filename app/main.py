@@ -1,6 +1,17 @@
 import os
 import sys
 
+# Prefer certifi's CA bundle on platforms where system CAs may be missing (e.g., macOS python.org builds)
+try:
+    import certifi  # type: ignore
+
+    # Only set if not already configured by the environment
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except Exception as _cert_err:  # pragma: no cover - best-effort hardening
+    # Continue without override; aiohttp will use system defaults
+    pass
+
 import discord
 from discord import app_commands
 from discord.ext import commands
