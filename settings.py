@@ -1,0 +1,13 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8')
+
+    discord_token: str
+    mongo_host: str
+    mongo_user: str
+    mongo_pass: str
+
+settings = Settings(_env_file='.env', _env_file_encoding='utf-8')
+
