@@ -1,5 +1,5 @@
 import discord
-from settings import settings
+from app.settings import settings
 
 intents = discord.Intents.default()
 intents.message_content = True

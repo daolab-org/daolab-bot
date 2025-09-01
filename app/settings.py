@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     discord_token: str
     mongo_host: str
     mongo_user: str
+    mongo_port: int = 27017
     mongo_pass: str
 
 settings = Settings(_env_file='.env', _env_file_encoding='utf-8')
