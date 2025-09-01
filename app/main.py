@@ -1,9 +1,19 @@
+import os
+import sys
+
 import discord
 from discord import app_commands
 from discord.ext import commands
+
 from app.settings import settings
 from app.database import db
 from app.services.attendance_service import attendance_service
+
+# Ensure project root is on sys.path when executed as a script (python app/main.py)
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 
 intents = discord.Intents.default()
 intents.message_content = True
