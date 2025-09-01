@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Literal
 from pydantic import BaseModel, Field, field_validator, ConfigDict, GetCoreSchemaHandler
 from pydantic_core import core_schema
 from bson import ObjectId
@@ -33,10 +33,10 @@ class PyObjectId(ObjectId):
 
 class User(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     discord_id: str = Field(..., description="Discord user ID")
     username: str = Field(..., description="Discord username")
-    nickname: Optional[str] = Field(None, description="Server nickname")
+    nickname: str | None = Field(None, description="Server nickname")
     generation: int = Field(..., ge=1, description="기수")
     total_points: int = Field(default=0, ge=0, description="총 포인트")
     created_at: datetime = Field(default_factory=now_kst)
@@ -55,15 +55,15 @@ TransactionReason = Literal["출석", "감사줌", "감사받음", "관리자지
 
 class Transaction(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     user_id: str = Field(..., description="대상 유저 Discord ID")
     points: int = Field(..., description="포인트 변동량 (+/-)")
     reason: TransactionReason = Field(..., description="변동 사유")
-    session: Optional[int] = Field(None, description="출석 회차")
-    from_user_id: Optional[str] = Field(None, description="보낸 유저 (감사)")
-    to_user_id: Optional[str] = Field(None, description="받은 유저 (감사)")
-    admin_id: Optional[str] = Field(None, description="관리자 ID")
-    admin_note: Optional[str] = Field(None, description="관리자 메모")
+    session: int | None = Field(None, description="출석 회차")
+    from_user_id: str | None = Field(None, description="보낸 유저 (감사)")
+    to_user_id: str | None = Field(None, description="받은 유저 (감사)")
+    admin_id: str | None = Field(None, description="관리자 ID")
+    admin_note: str | None = Field(None, description="관리자 메모")
     timestamp: datetime = Field(default_factory=now_kst)
 
     @field_validator("points")
@@ -76,7 +76,7 @@ class Transaction(BaseModel):
 
 class Attendance(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     session: int = Field(..., ge=1, description="출석 회차")
     user_id: str = Field(..., description="출석한 유저 Discord ID")
     code: str = Field(..., description="출석 코드")
@@ -86,13 +86,13 @@ class Attendance(BaseModel):
 
 class AttendanceCode(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     session: int = Field(..., ge=1, description="회차")
     code: str = Field(..., min_length=4, max_length=20, description="출석 코드")
     created_by: str = Field(..., description="생성한 관리자 Discord ID")
     is_active: bool = Field(default=True, description="활성화 여부")
     created_at: datetime = Field(default_factory=now_kst)
-    expires_at: Optional[datetime] = Field(None, description="만료 시간")
+    expires_at: datetime | None = Field(None, description="만료 시간")
 
     @field_validator("code")
     @classmethod
@@ -104,7 +104,7 @@ class AttendanceCode(BaseModel):
 
 class Gratitude(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     from_user_id: str = Field(..., description="감사를 보낸 유저")
     to_user_id: str = Field(..., description="감사를 받은 유저")
     date: str = Field(..., description="날짜 (YYYY-MM-DD)")

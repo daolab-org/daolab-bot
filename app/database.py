@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any
+from typing import Any
 from datetime import datetime
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
@@ -9,6 +9,7 @@ from app.timezone import now_kst, today_kst_str, KST
 
 class Database:
     def __init__(self):
+        # Lazily connected client/collections so tests and CLI can decide when to connect
         self.client = None
         self.db = None
         self.users_collection = None
@@ -29,6 +30,15 @@ class Database:
         self.gratitude_collection = self.db["gratitude"]
 
         self._create_indexes()
+
+    def ensure_connected(self) -> None:
+        """Ensure the Mongo client/collections are initialized.
+
+        Tests sometimes call `db.close()` between modules; calling this at the
+        start of public methods avoids `InvalidOperation: MongoClient after close`.
+        """
+        if self.client is None or self.db is None:
+            self.connect()
 
     def _create_indexes(self):
         self.users_collection.create_index("discord_id", unique=True, sparse=True)
@@ -57,14 +67,23 @@ class Database:
     def close(self):
         if self.client:
             self.client.close()
+        # Null out references so subsequent operations can reconnect cleanly
+        self.client = None
+        self.db = None
+        self.users_collection = None
+        self.transactions_collection = None
+        self.attendance_collection = None
+        self.attendance_codes_collection = None
+        self.gratitude_collection = None
 
     async def get_or_create_user(
         self,
         discord_id: str,
         username: str,
         generation: int = 6,
-        nickname: Optional[str] = None,
+        nickname: str | None = None,
     ) -> User:
+        self.ensure_connected()
         user_data = self.users_collection.find_one({"discord_id": discord_id})
 
         if user_data:
@@ -89,6 +108,7 @@ class Database:
             return User(**user_data)
 
     async def update_user_points(self, discord_id: str, points_delta: int) -> bool:
+        self.ensure_connected()
         result = self.users_collection.update_one(
             {"discord_id": discord_id},
             {
@@ -99,6 +119,7 @@ class Database:
         return result.modified_count > 0
 
     async def add_transaction(self, transaction: Transaction) -> Transaction:
+        self.ensure_connected()
         result = self.transactions_collection.insert_one(
             transaction.model_dump(by_alias=True)
         )
@@ -109,6 +130,7 @@ class Database:
         return transaction
 
     async def check_attendance_exists(self, session: int, user_id: str) -> bool:
+        self.ensure_connected()
         existing = self.attendance_collection.find_one(
             {"session": session, "user_id": user_id}
         )
@@ -116,7 +138,8 @@ class Database:
 
     async def record_attendance(
         self, session: int, user_id: str, code: str
-    ) -> Optional[Attendance]:
+    ) -> Attendance | None:
+        self.ensure_connected()
         if await self.check_attendance_exists(session, user_id):
             return None
 
@@ -142,7 +165,8 @@ class Database:
 
     async def get_valid_attendance_code(
         self, session: int, code: str
-    ) -> Optional[AttendanceCode]:
+    ) -> AttendanceCode | None:
+        self.ensure_connected()
         code_upper = code.upper()
         code_data = self.attendance_codes_collection.find_one(
             {"session": session, "code": code_upper, "is_active": True}
@@ -167,8 +191,9 @@ class Database:
         session: int,
         code: str,
         created_by: str,
-        expires_at: Optional[datetime] = None,
+        expires_at: datetime | None = None,
     ) -> AttendanceCode:
+        self.ensure_connected()
         attendance_code = AttendanceCode(
             session=session, code=code, created_by=created_by, expires_at=expires_at
         )
@@ -182,13 +207,15 @@ class Database:
         except DuplicateKeyError:
             raise ValueError(f"Code {code} already exists for session {session}")
 
-    async def get_user_attendance_records(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_user_attendance_records(self, user_id: str) -> list[dict[str, Any]]:
+        self.ensure_connected()
         cursor = self.attendance_collection.find({"user_id": user_id}).sort(
             "session", ASCENDING
         )
         return list(cursor)
 
     async def get_user_points(self, discord_id: str) -> int:
+        self.ensure_connected()
         user_data = self.users_collection.find_one({"discord_id": discord_id})
         if user_data:
             return user_data.get("total_points", 0)
@@ -196,7 +223,8 @@ class Database:
 
     async def get_user_transactions(
         self, user_id: str, limit: int = 10
-    ) -> List[Transaction]:
+    ) -> list[Transaction]:
+        self.ensure_connected()
         cursor = (
             self.transactions_collection.find({"user_id": user_id})
             .sort("timestamp", DESCENDING)
@@ -205,6 +233,7 @@ class Database:
         return [Transaction(**doc) for doc in cursor]
 
     async def check_gratitude_sent_today(self, from_user_id: str) -> bool:
+        self.ensure_connected()
         today = today_kst_str()
         existing = self.gratitude_collection.find_one(
             {"from_user_id": from_user_id, "date": today}
@@ -213,7 +242,8 @@ class Database:
 
     async def send_gratitude(
         self, from_user_id: str, to_user_id: str
-    ) -> Optional[Gratitude]:
+    ) -> Gratitude | None:
+        self.ensure_connected()
         if from_user_id == to_user_id:
             raise ValueError("Cannot send gratitude to yourself")
 
@@ -252,6 +282,24 @@ class Database:
             return gratitude
         except DuplicateKeyError:
             return None
+
+    async def get_gratitude_summary(self, user_id: str) -> dict[str, Any]:
+        self.ensure_connected()
+        total_sent = self.gratitude_collection.count_documents(
+            {"from_user_id": user_id}
+        )
+        total_received = self.gratitude_collection.count_documents(
+            {"to_user_id": user_id}
+        )
+        has_sent_today = await self.check_gratitude_sent_today(user_id)
+
+        return {
+            "total_sent": total_sent,
+            "total_received": total_received,
+            "has_sent_today": has_sent_today,
+            "points_from_sent": total_sent * 10,
+            "points_from_received": total_received * 10,
+        }
 
 
 db = Database()

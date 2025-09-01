@@ -19,6 +19,7 @@ from discord.ext import commands
 from app.settings import settings
 from app.database import db
 from app.services.attendance_service import attendance_service
+from app.services.gratitude_service import gratitude_service
 
 # Ensure project root is on sys.path when executed as a script (python app/main.py)
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -55,16 +56,23 @@ bot = DaoBot()
     action="수행할 작업",
     session="출석 회차 (출석 시 필수)",
     code="출석 코드 (출석 시 필수)",
+    target="감사를 보낼 대상 (감사 시 필수)",
 )
 @app_commands.choices(
     action=[
         app_commands.Choice(name="출석", value="attendance"),
         app_commands.Choice(name="내출석", value="my_attendance"),
         app_commands.Choice(name="포인트", value="points"),
+        app_commands.Choice(name="감사", value="gratitude"),
+        app_commands.Choice(name="감사내역", value="gratitude_history"),
     ]
 )
 async def dao_command(
-    interaction: discord.Interaction, action: str, session: int = None, code: str = None
+    interaction: discord.Interaction,
+    action: str,
+    session: int = None,
+    code: str = None,
+    target: discord.User = None,
 ):
     await interaction.response.defer()
 
@@ -87,7 +95,37 @@ async def dao_command(
 
     elif action == "points":
         points = await db.get_user_points(user_id)
-        await interaction.followup.send(f"💰 현재 포인트: **{points:,}점**")
+        gratitude_summary = await db.get_gratitude_summary(user_id)
+
+        message_lines = [
+            f"💰 **현재 포인트: {points:,}점**",
+            "",
+            "**감사 현황:**",
+            f"• 오늘 감사: {'전송 완료 ✓' if gratitude_summary['has_sent_today'] else '전송 가능 ○'}",
+            f"• 보낸 감사: {gratitude_summary['total_sent']}회 (+{gratitude_summary['points_from_sent']:,}점)",
+            f"• 받은 감사: {gratitude_summary['total_received']}회 (+{gratitude_summary['points_from_received']:,}점)",
+        ]
+
+        await interaction.followup.send("\n".join(message_lines))
+
+    elif action == "gratitude":
+        if target is None:
+            await interaction.followup.send(
+                "❌ 감사를 보낼 대상을 선택해주세요.\n예: `/dao 감사 @사용자`"
+            )
+            return
+
+        target_id = str(target.id)
+        target_username = target.name
+
+        result = await gratitude_service.send_gratitude(
+            user_id, username, target_id, target_username
+        )
+        await interaction.followup.send(result["message"])
+
+    elif action == "gratitude_history":
+        result = await gratitude_service.get_gratitude_history(user_id)
+        await interaction.followup.send(result["message"])
 
 
 @bot.tree.command(name="dao_admin", description="DAO 관리자 명령어")

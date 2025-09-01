@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any
 from app.database import db
 
 
@@ -13,7 +13,8 @@ class AttendanceService:
         session: int,
         code: str,
         generation: int = 6,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        self.db.ensure_connected()
         user = await self.db.get_or_create_user(discord_id, username, generation)  # noqa
 
         valid_code = await self.db.get_valid_attendance_code(session, code)
@@ -42,7 +43,8 @@ class AttendanceService:
         else:
             return {"success": False, "message": "❌ 출석 처리 중 오류가 발생했습니다."}
 
-    async def get_my_attendance(self, discord_id: str) -> Dict[str, Any]:
+    async def get_my_attendance(self, discord_id: str) -> dict[str, Any]:
+        self.db.ensure_connected()
         records = await self.db.get_user_attendance_records(discord_id)
 
         if not records:
@@ -88,7 +90,8 @@ class AttendanceService:
 
     async def create_attendance_code(
         self, session: int, code: str, admin_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        self.db.ensure_connected()
         try:
             attendance_code = await self.db.create_attendance_code(
                 session, code, admin_id
@@ -102,7 +105,8 @@ class AttendanceService:
         except ValueError as e:
             return {"success": False, "message": f"❌ {str(e)}"}
 
-    async def get_session_attendance(self, session: int) -> List[Dict[str, Any]]:
+    async def get_session_attendance(self, session: int) -> list[dict[str, Any]]:
+        self.db.ensure_connected()
         cursor = self.db.attendance_collection.find({"session": session})
         attendance_list = []
 
