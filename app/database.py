@@ -1,9 +1,8 @@
 from typing import Any
-from datetime import datetime
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 from app.settings import settings
-from app.models import User, Transaction, Attendance, AttendanceCode, Gratitude
+from app.models import User, Transaction, Attendance, Gratitude
 from app.timezone import now_kst, today_kst_str, KST
 
 
@@ -15,7 +14,6 @@ class Database:
         self.users_collection = None
         self.transactions_collection = None
         self.attendance_collection = None
-        self.attendance_codes_collection = None
         self.gratitude_collection = None
 
     def connect(self):
@@ -26,7 +24,6 @@ class Database:
         self.users_collection = self.db["users"]
         self.transactions_collection = self.db["transactions"]
         self.attendance_collection = self.db["attendance"]
-        self.attendance_codes_collection = self.db["attendance_codes"]
         self.gratitude_collection = self.db["gratitude"]
 
         self._create_indexes()
@@ -48,16 +45,22 @@ class Database:
         self.transactions_collection.create_index([("timestamp", DESCENDING)])
         self.transactions_collection.create_index("reason")
 
+        # Attendance: unique per (generation, week, day, user)
         self.attendance_collection.create_index(
-            [("session", ASCENDING), ("user_id", ASCENDING)], unique=True
+            [
+                ("generation", ASCENDING),
+                ("week", ASCENDING),
+                ("day", ASCENDING),
+                ("user_id", ASCENDING),
+            ],
+            unique=True,
         )
         self.attendance_collection.create_index("user_id")
-        self.attendance_collection.create_index("date")
-
-        self.attendance_codes_collection.create_index(
-            [("session", ASCENDING), ("code", ASCENDING)], unique=True
+        self.attendance_collection.create_index("generation")
+        self.attendance_collection.create_index(
+            [("generation", ASCENDING), ("week", ASCENDING)]
         )
-        self.attendance_codes_collection.create_index("is_active")
+        self.attendance_collection.create_index("date")
 
         self.gratitude_collection.create_index(
             [("from_user_id", ASCENDING), ("date", ASCENDING)], unique=True
@@ -73,7 +76,6 @@ class Database:
         self.users_collection = None
         self.transactions_collection = None
         self.attendance_collection = None
-        self.attendance_codes_collection = None
         self.gratitude_collection = None
 
     async def get_or_create_user(
@@ -143,8 +145,9 @@ class Database:
 
     async def check_attendance_exists(self, session: int, user_id: str) -> bool:
         self.ensure_connected()
+        # Legacy shim kept for compatibility if called elsewhere; now unused
         existing = self.attendance_collection.find_one(
-            {"session": session, "user_id": user_id}
+            {"user_id": user_id, "date": today_kst_str()}
         )
         return existing is not None
 
@@ -152,14 +155,34 @@ class Database:
         self, session: int, user_id: str, code: str
     ) -> Attendance | None:
         self.ensure_connected()
-        if await self.check_attendance_exists(session, user_id):
-            return None
+        # Legacy shim: map session-based call to generation/week/day not supported anymore
+        # This path is deprecated; always return None
+        return None
 
+    # New attendance APIs (generation/week/day)
+    async def record_attendance_by_period(
+        self,
+        *,
+        generation: int,
+        week: int,
+        day: int,
+        user_id: str,
+        channel_id: int | None = None,
+        announcement_message_id: int | None = None,
+        reply_message_id: int | None = None,
+    ) -> Attendance | None:
+        self.ensure_connected()
         date_str = today_kst_str()
         attendance = Attendance(
-            session=session, user_id=user_id, code=code, date=date_str
+            generation=generation,
+            week=week,
+            day=day,
+            user_id=user_id,
+            channel_id=channel_id,
+            announcement_message_id=announcement_message_id,
+            reply_message_id=reply_message_id,
+            date=date_str,
         )
-
         try:
             result = self.attendance_collection.insert_one(
                 attendance.model_dump(by_alias=True)
@@ -167,62 +190,19 @@ class Database:
             attendance.id = result.inserted_id
 
             transaction = Transaction(
-                user_id=user_id, points=100, reason="출석", session=session
+                user_id=user_id,
+                points=100,
+                reason="출석",
             )
             await self.add_transaction(transaction)
-
             return attendance
         except DuplicateKeyError:
             return None
 
-    async def get_valid_attendance_code(
-        self, session: int, code: str
-    ) -> AttendanceCode | None:
-        self.ensure_connected()
-        code_upper = code.upper()
-        code_data = self.attendance_codes_collection.find_one(
-            {"session": session, "code": code_upper, "is_active": True}
-        )
-
-        if not code_data:
-            return None
-
-        attendance_code = AttendanceCode(**code_data)
-
-        if attendance_code.expires_at:
-            exp = attendance_code.expires_at
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=KST)
-            if exp < now_kst():
-                return None
-
-        return attendance_code
-
-    async def create_attendance_code(
-        self,
-        session: int,
-        code: str,
-        created_by: str,
-        expires_at: datetime | None = None,
-    ) -> AttendanceCode:
-        self.ensure_connected()
-        attendance_code = AttendanceCode(
-            session=session, code=code, created_by=created_by, expires_at=expires_at
-        )
-
-        try:
-            result = self.attendance_codes_collection.insert_one(
-                attendance_code.model_dump(by_alias=True)
-            )
-            attendance_code.id = result.inserted_id
-            return attendance_code
-        except DuplicateKeyError:
-            raise ValueError(f"Code {code} already exists for session {session}")
-
     async def get_user_attendance_records(self, user_id: str) -> list[dict[str, Any]]:
         self.ensure_connected()
         cursor = self.attendance_collection.find({"user_id": user_id}).sort(
-            "session", ASCENDING
+            [("generation", ASCENDING), ("week", ASCENDING), ("day", ASCENDING)]
         )
         return list(cursor)
 
@@ -340,6 +320,48 @@ class Database:
             "total_attendance": total_attendance,
             "points_from_attendance": total_attendance * 100,
             "has_attended_today": has_attended_today,
+        }
+
+    async def get_weekly_attendance(self, generation: int, week: int) -> dict[str, Any]:
+        """Aggregate weekly attendance for admin view.
+
+        Returns:
+        - total_attendees: number of unique users attended in the week
+        - by_day: list of {day, count}
+        - users: list of {user_id, days: [int]}
+        """
+        self.ensure_connected()
+        pipeline = [
+            {"$match": {"generation": generation, "week": week}},
+            {
+                "$group": {
+                    "_id": "$user_id",
+                    "days": {"$addToSet": "$day"},
+                }
+            },
+            {"$sort": {"_id": 1}},
+        ]
+        user_days = list(self.attendance_collection.aggregate(pipeline))
+        users = []
+        for item in user_days:
+            users.append({"user_id": item["_id"], "days": sorted(item["days"])})
+
+        by_day_pipeline = [
+            {"$match": {"generation": generation, "week": week}},
+            {"$group": {"_id": "$day", "count": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+        ]
+        by_day = [
+            {"day": item["_id"], "count": item["count"]}
+            for item in self.attendance_collection.aggregate(by_day_pipeline)
+        ]
+
+        return {
+            "generation": generation,
+            "week": week,
+            "total_attendees": len(users),
+            "by_day": by_day,
+            "users": users,
         }
 
 

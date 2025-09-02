@@ -12,50 +12,43 @@ async def run_attendance():
     db.connect()
     print("✓ Database 연결 완료\n")
 
-    test_admin_id = "123456789012345678"
     test_user_id = "987654321098765432"
     test_username = "TestUser"
-    test_session = 1
-    test_code = "TEST2025"
+    generation = 6
+    week = 1
+    day = 1
 
-    print("1. 출석 코드 생성 테스트")
-    print(f"   - 세션: {test_session}회차")
-    print(f"   - 코드: {test_code}")
-    result = await attendance_service.create_attendance_code(
-        test_session, test_code, test_admin_id
-    )
-    print(f"   결과: {result['message']}\n")
-
-    print("2. 출석 체크 테스트")
+    print("1. 출석 체크 테스트 (관리자 반응 승인 흐름 시뮬레이션)")
     print(f"   - 유저: {test_username} ({test_user_id})")
-    print(f"   - 세션: {test_session}회차")
-    print(f"   - 코드: {test_code}")
-    result = await attendance_service.check_in(
-        test_user_id, test_username, test_session, test_code
+    print(f"   - 메타: {generation}기 {week}주차 {day}일")
+    result = await attendance_service.record_by_metadata(
+        user_id=test_user_id,
+        username=test_username,
+        generation=generation,
+        week=week,
+        day=day,
     )
     print(f"   결과: {result['message']}\n")
 
-    print("3. 중복 출석 방지 테스트")
-    result = await attendance_service.check_in(
-        test_user_id, test_username, test_session, test_code
+    print("2. 중복 출석 방지 테스트 (같은 일차)")
+    result = await attendance_service.record_by_metadata(
+        user_id=test_user_id,
+        username=test_username,
+        generation=generation,
+        week=week,
+        day=day,
     )
     print(f"   결과: {result['message']}\n")
 
-    print("4. 잘못된 코드 테스트")
-    result = await attendance_service.check_in(
-        test_user_id, test_username, test_session, "WRONG"
-    )
-    print(f"   결과: {result['message']}\n")
-
-    print("5. 출석 현황 조회 테스트")
+    print("3. 출석 현황 조회 테스트")
     result = await attendance_service.get_my_attendance(test_user_id)
     print(f"   결과:\n{result['message']}\n")
 
-    print("6. 포인트 조회 테스트")
+    print("4. 포인트 조회 테스트")
     points = await db.get_user_points(test_user_id)
     print(f"   현재 포인트: {points:,}점\n")
 
-    print("7. 데이터베이스 직접 확인")
+    print("5. 데이터베이스 직접 확인")
     user = db.users_collection.find_one({"discord_id": test_user_id})
     if user:
         print(f"   - 유저: {user['username']}")

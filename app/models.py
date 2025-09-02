@@ -77,29 +77,28 @@ class Transaction(BaseModel):
 class Attendance(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
-    session: int = Field(..., ge=1, description="출석 회차")
+    generation: int = Field(..., ge=1, description="기수 (예: 6)")
+    week: int = Field(..., ge=1, description="주차 (예: 1주차 → 1)")
+    day: int = Field(..., ge=1, description="요일/일차 (예: 1일 → 1)")
     user_id: str = Field(..., description="출석한 유저 Discord ID")
-    code: str = Field(..., description="출석 코드")
+    channel_id: int | None = Field(None, description="출석 진행 채널 ID")
+    announcement_message_id: int | None = Field(None, description="출석 공지 메시지 ID")
+    reply_message_id: int | None = Field(None, description="참여자 댓글 메시지 ID")
     date: str = Field(..., description="출석 날짜 (YYYY-MM-DD)")
     checked_at: datetime = Field(default_factory=now_kst)
 
 
 class AttendanceCode(BaseModel):
+    """Deprecated: 유지보수를 위해 남겨두지만 더 이상 사용하지 않음."""
+
     model_config = ConfigDict(populate_by_name=True)
     id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
-    session: int = Field(..., ge=1, description="회차")
-    code: str = Field(..., min_length=4, max_length=20, description="출석 코드")
-    created_by: str = Field(..., description="생성한 관리자 Discord ID")
-    is_active: bool = Field(default=True, description="활성화 여부")
+    session: int = Field(0, description="레거시 회차")
+    code: str = Field("", description="레거시 출석 코드")
+    created_by: str | None = Field(None, description="레거시 생성자")
+    is_active: bool = Field(default=False, description="레거시 활성화 여부")
     created_at: datetime = Field(default_factory=now_kst)
-    expires_at: datetime | None = Field(None, description="만료 시간")
-
-    @field_validator("code")
-    @classmethod
-    def validate_code(cls, v):
-        if not v.isalnum():
-            raise ValueError("Code must be alphanumeric")
-        return v.upper()
+    expires_at: datetime | None = Field(None, description="레거시 만료 시간")
 
 
 class Gratitude(BaseModel):

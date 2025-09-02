@@ -6,45 +6,50 @@ class AttendanceService:
     def __init__(self):
         self.db = db
 
-    async def check_in(
+    async def record_by_metadata(
         self,
-        discord_id: str,
+        *,
+        user_id: str,
         username: str,
-        session: int,
-        code: str,
-        generation: int = 6,
+        generation: int,
+        week: int,
+        day: int,
         nickname: str | None = None,
+        channel_id: int | None = None,
+        announcement_message_id: int | None = None,
+        reply_message_id: int | None = None,
     ) -> dict[str, Any]:
         self.db.ensure_connected()
-        user = await self.db.get_or_create_user(  # noqa
-            discord_id, username, generation, nickname=nickname
+        await self.db.get_or_create_user(
+            user_id, username, generation, nickname=nickname
         )
 
-        valid_code = await self.db.get_valid_attendance_code(session, code)
-        if not valid_code:
-            return {
-                "success": False,
-                "message": f"❌ 유효하지 않은 출석 코드입니다: {code}",
-            }
-
-        if await self.db.check_attendance_exists(session, discord_id):
-            return {
-                "success": False,
-                "message": f"❌ {session}회차에 이미 출석했습니다.",
-            }
-
-        attendance = await self.db.record_attendance(session, discord_id, code)
+        attendance = await self.db.record_attendance_by_period(
+            generation=generation,
+            week=week,
+            day=day,
+            user_id=user_id,
+            channel_id=channel_id,
+            announcement_message_id=announcement_message_id,
+            reply_message_id=reply_message_id,
+        )
 
         if attendance:
-            new_points = await self.db.get_user_points(discord_id)
+            new_points = await self.db.get_user_points(user_id)
             return {
                 "success": True,
-                "message": f"✅ {session}회차 출석 완료! (+100 포인트)\n현재 포인트: {new_points:,}점",
+                "message": (
+                    f"✅ {generation}기 {week}주차 {day}일 출석 완료! (+100 포인트)\n"
+                    f"현재 포인트: {new_points:,}점"
+                ),
                 "points_added": 100,
                 "total_points": new_points,
             }
         else:
-            return {"success": False, "message": "❌ 출석 처리 중 오류가 발생했습니다."}
+            return {
+                "success": False,
+                "message": "❌ 이미 출석 처리되었거나 오류가 발생했습니다.",
+            }
 
     async def get_my_attendance(self, discord_id: str) -> dict[str, Any]:
         self.db.ensure_connected()
@@ -62,9 +67,10 @@ class AttendanceService:
         for record in records:
             attendance_list.append(
                 {
-                    "session": record["session"],
-                    "date": record["date"],
-                    "code": record["code"],
+                    "generation": record.get("generation"),
+                    "week": record.get("week"),
+                    "day": record.get("day"),
+                    "date": record.get("date"),
                 }
             )
 
@@ -75,11 +81,13 @@ class AttendanceService:
             f"총 출석: {len(records)}회",
             f"획득 포인트: {total_points:,} point",
             "",
-            "**출석 내역:**",
+            "**최근 출석:**",
         ]
 
         for record in attendance_list[-5:]:
-            message_lines.append(f"• {record['session']}회차 ({record['date']})")
+            message_lines.append(
+                f"• {record['generation']}기 {record['week']}주차 {record['day']}일 ({record['date']})"
+            )
 
         if len(attendance_list) > 5:
             message_lines.append(f"... 외 {len(attendance_list) - 5}건")
@@ -90,41 +98,6 @@ class AttendanceService:
             "total_attendance": len(records),
             "records": attendance_list,
         }
-
-    async def create_attendance_code(
-        self, session: int, code: str, admin_id: str
-    ) -> dict[str, Any]:
-        self.db.ensure_connected()
-        try:
-            attendance_code = await self.db.create_attendance_code(
-                session, code, admin_id
-            )
-            return {
-                "success": True,
-                "message": f"✅ {session}회차 출석 코드 생성 완료: **{attendance_code.code}**",
-                "code": attendance_code.code,
-                "session": session,
-            }
-        except ValueError as e:
-            return {"success": False, "message": f"❌ {str(e)}"}
-
-    async def get_session_attendance(self, session: int) -> list[dict[str, Any]]:
-        self.db.ensure_connected()
-        cursor = self.db.attendance_collection.find({"session": session})
-        attendance_list = []
-
-        for record in cursor:
-            user = await self.db.get_or_create_user(record["user_id"], "Unknown", 6)
-            attendance_list.append(
-                {
-                    "user_id": record["user_id"],
-                    "username": user.username,
-                    "date": record["date"],
-                    "code": record["code"],
-                }
-            )
-
-        return attendance_list
 
 
 attendance_service = AttendanceService()

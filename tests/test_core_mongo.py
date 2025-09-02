@@ -53,18 +53,19 @@ async def run_core_scenarios():
     # 4. 출석 중복 방지 (unique index)
     print("4. 출석 중복 방지 테스트")
 
-    # 출석 코드 생성
-    code = await db.create_attendance_code(1, "MONGO2025", "admin123")
-    assert code.code == "MONGO2025"
-    print(f"   ✓ 출석 코드 생성: {code.code}")
-
-    # 첫 출석
-    attendance1 = await db.record_attendance(1, test_user_id, "MONGO2025")
+    # 첫 출석 (6기 1주차 1일)
+    attendance1 = await db.record_attendance_by_period(
+        generation=6, week=1, day=1, user_id=test_user_id
+    )
     assert attendance1 is not None
-    print(f"   ✓ 첫 출석 성공 (세션 {attendance1.session})")
+    print(
+        f"   ✓ 첫 출석 성공 ({attendance1.generation}기 {attendance1.week}주차 {attendance1.day}일)"
+    )
 
-    # 중복 출석 시도
-    attendance2 = await db.record_attendance(1, test_user_id, "MONGO2025")
+    # 중복 출석 시도 (같은 메타)
+    attendance2 = await db.record_attendance_by_period(
+        generation=6, week=1, day=1, user_id=test_user_id
+    )
     assert attendance2 is None, "중복 출석이 허용됨!"
     print("   ✓ 중복 출석 차단 확인\n")
 
@@ -89,7 +90,7 @@ async def run_core_scenarios():
     db.users_collection.delete_one({"discord_id": test_user_id})
     db.transactions_collection.delete_many({"user_id": test_user_id})
     db.attendance_collection.delete_many({"user_id": test_user_id})
-    db.attendance_codes_collection.delete_many({"code": "MONGO2025"})
+    # no attendance_codes in new design
     print("   ✓ 테스트 데이터 삭제 완료")
 
     db.close()

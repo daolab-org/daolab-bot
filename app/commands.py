@@ -24,27 +24,6 @@ def register_commands(bot: commands.Bot) -> None:
     # ----- /dao 그룹 및 하위 명령어 -----
     dao = app_commands.Group(name="dao", description="DAO 명령어")
 
-    @dao.command(name="출석", description="출석 체크 (+100p)")
-    @app_commands.describe(session="출석 회차", code="출석 코드")
-    async def dao_attendance(
-        interaction: discord.Interaction, session: int, code: str
-    ) -> None:
-        await interaction.response.defer()
-
-        user_id = str(interaction.user.id)
-        username = interaction.user.name
-        member = (
-            interaction.guild.get_member(interaction.user.id)
-            if interaction.guild is not None
-            else None
-        )
-        nickname = member.display_name if member is not None else username
-
-        result = await attendance_service.check_in(
-            user_id, username, session, code, nickname=nickname
-        )
-        await interaction.followup.send(result["message"])
-
     @dao.command(name="출석내역", description="내 출석 내역 조회")
     async def dao_my_attendance(interaction: discord.Interaction) -> None:
         await interaction.response.defer()
@@ -128,7 +107,6 @@ def register_commands(bot: commands.Bot) -> None:
         await interaction.followup.send(result["message"])
 
     # Localize subcommand names for Korean UX
-    dao_attendance.name_localizations = {"ko": "출석"}
     dao_my_attendance.name_localizations = {"ko": "출석내역"}
     dao_points.name_localizations = {"ko": "포인트"}
     dao_gratitude.name_localizations = {"ko": "감사"}
@@ -152,14 +130,14 @@ def register_commands(bot: commands.Bot) -> None:
             "• /도움말 — 이 도움말 표시",
             "",
             "**DAO 명령어**",
-            "• /dao 출석 [회차] [코드] — 출석 체크 (+100p)",
+            "• 출석: 공지(예: `6주차 1일`)에 댓글 달면, 관리자가 이모지 반응으로 승인할 때 적립됩니다.",
             "• /dao 출석내역 — 내 출석 내역",
             "• /dao 감사 @대상 [메시지] — 감사 보내기 (1일 1회, +10p/+10p)",
             "• /dao 감사내역 — 감사 내역",
             "• /dao 포인트 — 포인트 및 출석/감사 요약",
             "",
             "**관리자**",
-            "• /dao_admin 출석코드생성 [회차] [코드] — 출석 코드 생성",
+            "• /dao_admin 출석현황 [기수] [주차] — 주차별 출석 집계",
         ]
         return "\n".join(lines)
 
@@ -198,31 +176,49 @@ def register_commands(bot: commands.Bot) -> None:
 
     # --------- 관리자 명령어 ---------
     @bot.tree.command(name="dao_admin", description="DAO 관리자 명령어")
-    @app_commands.describe(action="수행할 작업", session="회차", code="출석 코드")
+    @app_commands.describe(action="수행할 작업", generation="기수", week="주차")
     @app_commands.choices(
-        action=[app_commands.Choice(name="출석코드생성", value="create_code")]
+        action=[app_commands.Choice(name="출석현황", value="weekly_summary")]
     )
     @app_commands.default_permissions(administrator=True)
     async def dao_admin_command(
         interaction: discord.Interaction,
         action: str,
-        session: int | None = None,
-        code: str | None = None,
+        generation: int | None = None,
+        week: int | None = None,
     ) -> None:
         await interaction.response.defer()
 
-        if action == "create_code":
-            if session is None or code is None:
+        if action == "weekly_summary":
+            if generation is None or week is None:
                 await interaction.followup.send(
-                    "❌ 회차와 코드를 모두 입력해주세요.\n예: `/dao_admin 출석코드생성 1 ABC123`"
+                    "❌ 기수와 주차를 모두 입력해주세요.\n예: `/dao_admin 출석현황 6 1`"
                 )
                 return
 
-            admin_id = str(interaction.user.id)
-            result = await attendance_service.create_attendance_code(
-                session, code, admin_id
+            summary = await db.get_weekly_attendance(generation, week)
+            lines: list[str] = []
+            lines.append(
+                f"📅 **{generation}기 {week}주차 출석 현황** (고유 인원 {summary['total_attendees']}명)"
             )
-            await interaction.followup.send(result["message"])
+            if summary["by_day"]:
+                day_str = ", ".join(
+                    [
+                        f"{item['day']}일: {item['count']}건"
+                        for item in summary["by_day"]
+                    ]
+                )
+                lines.append(f"• 일별 합계: {day_str}")
+            if summary["users"]:
+                lines.append("")
+                lines.append("**참여자 요약 (일차):**")
+                # Limit to 30 lines for readability
+                for user in summary["users"][:30]:
+                    days = ", ".join(str(d) for d in user["days"]) or "-"
+                    lines.append(f"• <@{user['user_id']}> — {days}")
+                if len(summary["users"]) > 30:
+                    lines.append(f"... 외 {len(summary['users']) - 30}명")
+            await interaction.followup.send("\n".join(lines))
 
     # --------- 수동 동기화 (prefix: !sync) ---------
     @bot.command(name="sync")
