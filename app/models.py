@@ -109,6 +109,9 @@ class Gratitude(BaseModel):
     to_user_id: str = Field(..., description="감사를 받은 유저")
     date: str = Field(..., description="날짜 (YYYY-MM-DD)")
     points: int = Field(default=10, description="감사 포인트")
+    message: str | None = Field(
+        None, max_length=200, description="감사 전달 메시지 (선택)"
+    )
     created_at: datetime = Field(default_factory=now_kst)
 
     @field_validator("to_user_id")

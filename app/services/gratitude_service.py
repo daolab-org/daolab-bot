@@ -12,6 +12,7 @@ class GratitudeService:
         from_username: str,
         to_discord_id: str,
         to_username: str,
+        message: str | None = None,
         generation: int = 6,
     ) -> dict[str, Any]:
         # Ensure DB is connected in case another test/module closed it
@@ -36,13 +37,26 @@ class GratitudeService:
                 "already_sent": True,
             }
 
-        gratitude = await self.db.send_gratitude(from_discord_id, to_discord_id)
+        # Normalize and limit message length (max 200 chars)
+        norm_message: str | None
+        if isinstance(message, str):
+            trimmed = message.strip()
+            if trimmed:
+                norm_message = trimmed[:200]
+            else:
+                norm_message = None
+        else:
+            norm_message = None
+
+        gratitude = await self.db.send_gratitude(
+            from_discord_id, to_discord_id, norm_message
+        )
 
         if gratitude:
             from_points = await self.db.get_user_points(from_discord_id)
             to_points = await self.db.get_user_points(to_discord_id)
 
-            return {
+            response = {
                 "success": True,
                 "message": (
                     f"💝 **{from_user.username}**님이 **{to_user.username}**님에게 감사를 전했습니다!\n"
@@ -62,6 +76,14 @@ class GratitudeService:
                     "total_points": to_points,
                 },
             }
+
+            # Append message line if provided
+            if norm_message:
+                response["message"] = (
+                    response["message"] + "\n\n" + f"📝 메시지: {norm_message}"
+                )
+
+            return response
         else:
             return {
                 "success": False,

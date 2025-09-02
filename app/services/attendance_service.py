@@ -70,7 +70,7 @@ class AttendanceService:
         message_lines = [
             "📊 **출석 현황**",
             f"총 출석: {len(records)}회",
-            f"획득 포인트: {total_points:,}점",
+            f"획득 포인트: {total_points:,} point",
             "",
             "**출석 내역:**",
         ]

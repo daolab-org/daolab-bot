@@ -241,7 +241,7 @@ class Database:
         return existing is not None
 
     async def send_gratitude(
-        self, from_user_id: str, to_user_id: str
+        self, from_user_id: str, to_user_id: str, message: str | None = None
     ) -> Gratitude | None:
         self.ensure_connected()
         if from_user_id == to_user_id:
@@ -252,7 +252,12 @@ class Database:
 
         today = today_kst_str()
         gratitude = Gratitude(
-            from_user_id=from_user_id, to_user_id=to_user_id, date=today
+            from_user_id=from_user_id,
+            to_user_id=to_user_id,
+            date=today,
+            message=message.strip()
+            if isinstance(message, str) and message.strip()
+            else None,
         )
 
         try:

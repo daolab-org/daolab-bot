@@ -24,7 +24,7 @@ def register_commands(bot: commands.Bot) -> None:
     # ----- /dao 그룹 및 하위 명령어 -----
     dao = app_commands.Group(name="dao", description="DAO 명령어")
 
-    @dao.command(name="출석", description="출석 체크 (+100점)")
+    @dao.command(name="출석", description="출석 체크 (+100p)")
     @app_commands.describe(session="출석 회차", code="출석 코드")
     async def dao_attendance(
         interaction: discord.Interaction, session: int, code: str
@@ -55,24 +55,28 @@ def register_commands(bot: commands.Bot) -> None:
         gratitude_summary = await db.get_gratitude_summary(user_id)
 
         message_lines = [
-            f"💰 **현재 포인트: {points:,}점**",
+            f"💰 **현재 포인트: {points:,} point**",
             "",
             "**1) 출석 내역:**",
-            f"• 총 출석: {attendance_summary['total_attendance']}회 (+{attendance_summary['points_from_attendance']:,}점)",
+            f"• 총 출석: {attendance_summary['total_attendance']}회 (+{attendance_summary['points_from_attendance']:,} point)",
             f"• 오늘 출석: {'완료 ✓' if attendance_summary['has_attended_today'] else '가능 ○'}",
             "",
             "**2) 감사 내역:**",
             f"• 오늘 감사: {'전송 완료 ✓' if gratitude_summary['has_sent_today'] else '전송 가능 ○'}",
-            f"• 보낸 감사: {gratitude_summary['total_sent']}회 (+{gratitude_summary['points_from_sent']:,}점)",
-            f"• 받은 감사: {gratitude_summary['total_received']}회 (+{gratitude_summary['points_from_received']:,}점)",
+            f"• 보낸 감사: {gratitude_summary['total_sent']}회 (+{gratitude_summary['points_from_sent']:,} point)",
+            f"• 받은 감사: {gratitude_summary['total_received']}회 (+{gratitude_summary['points_from_received']:,} point)",
         ]
 
         await interaction.followup.send("\n".join(message_lines))
 
-    @dao.command(name="감사", description="감사 보내기 (+10/+10)")
-    @app_commands.describe(target="감사를 보낼 대상")
+    @dao.command(name="감사", description="감사 보내기 (+10p)")
+    @app_commands.describe(
+        target="감사를 보낼 대상", message="상대에게 전할 메시지 (선택)"
+    )
     async def dao_gratitude(
-        interaction: discord.Interaction, target: discord.User
+        interaction: discord.Interaction,
+        target: discord.User,
+        message: str | None = None,
     ) -> None:
         await interaction.response.defer()
 
@@ -83,7 +87,7 @@ def register_commands(bot: commands.Bot) -> None:
         target_username = target.name
 
         result = await gratitude_service.send_gratitude(
-            user_id, username, target_id, target_username
+            user_id, username, target_id, target_username, message=message
         )
         await interaction.followup.send(result["message"])
 
@@ -120,9 +124,9 @@ def register_commands(bot: commands.Bot) -> None:
             "• /도움말 — 이 도움말 표시",
             "",
             "**DAO 명령어**",
-            "• /dao 출석 [회차] [코드] — 출석 체크 (+100점)",
+            "• /dao 출석 [회차] [코드] — 출석 체크 (+100p)",
             "• /dao 출석내역 — 내 출석 내역",
-            "• /dao 감사 @대상 — 감사 보내기 (1일 1회, +10/+10)",
+            "• /dao 감사 @대상 [메시지] — 감사 보내기 (1일 1회, +10p/+10p)",
             "• /dao 감사내역 — 감사 내역",
             "• /dao 포인트 — 포인트 및 출석/감사 요약",
             "",
