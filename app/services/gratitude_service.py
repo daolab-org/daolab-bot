@@ -12,6 +12,9 @@ class GratitudeService:
         from_username: str,
         to_discord_id: str,
         to_username: str,
+        *,
+        from_nickname: str | None = None,
+        to_nickname: str | None = None,
         message: str | None = None,
         generation: int = 6,
     ) -> dict[str, Any]:
@@ -24,10 +27,10 @@ class GratitudeService:
             }
 
         from_user = await self.db.get_or_create_user(
-            from_discord_id, from_username, generation
+            from_discord_id, from_username, generation, nickname=from_nickname
         )
         to_user = await self.db.get_or_create_user(
-            to_discord_id, to_username, generation
+            to_discord_id, to_username, generation, nickname=to_nickname
         )
 
         if await self.db.check_gratitude_sent_today(from_discord_id):
@@ -56,12 +59,22 @@ class GratitudeService:
             from_points = await self.db.get_user_points(from_discord_id)
             to_points = await self.db.get_user_points(to_discord_id)
 
+            def _display(u) -> str:
+                try:
+                    nn = getattr(u, "nickname", None)
+                    un = getattr(u, "username", None)
+                    if nn and un and nn != un:
+                        return f"{nn}({un})"
+                    return un or nn or "Unknown"
+                except Exception:
+                    return "Unknown"
+
             response = {
                 "success": True,
                 "message": (
-                    f"💝 **{from_user.username}**님이 **{to_user.username}**님에게 감사를 전했습니다!\n"
-                    f"• {from_user.username}: +10 포인트 (현재: {from_points:,}점)\n"
-                    f"• {to_user.username}: +10 포인트 (현재: {to_points:,}점)"
+                    f"💝 **{_display(from_user)}**님이 **{_display(to_user)}**님에게 감사를 전했습니다!\n"
+                    f"• {_display(from_user)}: +10 포인트 (현재: {from_points:,}점)\n"
+                    f"• {_display(to_user)}: +10 포인트 (현재: {to_points:,}점)"
                 ),
                 "from_user": {
                     "id": from_discord_id,
@@ -116,7 +129,9 @@ class GratitudeService:
             sent_list.append(
                 {
                     "to_user_id": record["to_user_id"],
-                    "to_username": to_user.username,
+                    "to_username": to_user.nickname
+                    if (to_user.nickname and to_user.nickname != to_user.username)
+                    else to_user.username,
                     "date": record["date"],
                     "points": record["points"],
                 }
@@ -129,7 +144,9 @@ class GratitudeService:
             received_list.append(
                 {
                     "from_user_id": record["from_user_id"],
-                    "from_username": from_user.username,
+                    "from_username": from_user.nickname
+                    if (from_user.nickname and from_user.nickname != from_user.username)
+                    else from_user.username,
                     "date": record["date"],
                     "points": record["points"],
                 }
@@ -199,7 +216,9 @@ class GratitudeService:
             top_recipients.append(
                 {
                     "user_id": item["_id"],
-                    "username": user.username,
+                    "username": user.nickname
+                    if (user.nickname and user.nickname != user.username)
+                    else user.username,
                     "count": item["count"],
                 }
             )

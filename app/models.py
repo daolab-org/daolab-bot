@@ -36,7 +36,7 @@ class User(BaseModel):
     id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
     discord_id: str = Field(..., description="Discord user ID")
     username: str = Field(..., description="Discord username")
-    nickname: str | None = Field(None, description="Server nickname")
+    nickname: str | None = Field(None, description="서버 별명")
     generation: int = Field(..., ge=1, description="기수")
     total_points: int = Field(default=0, ge=0, description="총 포인트")
     created_at: datetime = Field(default_factory=now_kst)

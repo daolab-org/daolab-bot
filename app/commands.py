@@ -33,8 +33,16 @@ def register_commands(bot: commands.Bot) -> None:
 
         user_id = str(interaction.user.id)
         username = interaction.user.name
+        member = (
+            interaction.guild.get_member(interaction.user.id)
+            if interaction.guild is not None
+            else None
+        )
+        nickname = member.display_name if member is not None else username
 
-        result = await attendance_service.check_in(user_id, username, session, code)
+        result = await attendance_service.check_in(
+            user_id, username, session, code, nickname=nickname
+        )
         await interaction.followup.send(result["message"])
 
     @dao.command(name="출석내역", description="내 출석 내역 조회")
@@ -82,12 +90,32 @@ def register_commands(bot: commands.Bot) -> None:
 
         user_id = str(interaction.user.id)
         username = interaction.user.name
+        member = (
+            interaction.guild.get_member(interaction.user.id)
+            if interaction.guild is not None
+            else None
+        )
+        nickname = member.display_name if member is not None else username
 
         target_id = str(target.id)
         target_username = target.name
+        target_member = (
+            interaction.guild.get_member(target.id)
+            if interaction.guild is not None
+            else None
+        )
+        target_nickname = (
+            target_member.display_name if target_member is not None else target_username
+        )
 
         result = await gratitude_service.send_gratitude(
-            user_id, username, target_id, target_username, message=message
+            user_id,
+            username,
+            target_id,
+            target_username,
+            message=message,
+            from_nickname=nickname,
+            to_nickname=target_nickname,
         )
         await interaction.followup.send(result["message"])
 

@@ -87,6 +87,18 @@ class Database:
         user_data = self.users_collection.find_one({"discord_id": discord_id})
 
         if user_data:
+            # Update username/nickname if they changed
+            updates: dict[str, Any] = {}
+            if username and user_data.get("username") != username:
+                updates["username"] = username
+            if nickname and user_data.get("nickname") != nickname:
+                updates["nickname"] = nickname
+            if updates:
+                updates["updated_at"] = now_kst()
+                self.users_collection.update_one(
+                    {"discord_id": discord_id}, {"$set": updates}
+                )
+                user_data.update(updates)
             return User(**user_data)
 
         new_user = User(

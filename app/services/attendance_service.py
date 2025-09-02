@@ -13,9 +13,12 @@ class AttendanceService:
         session: int,
         code: str,
         generation: int = 6,
+        nickname: str | None = None,
     ) -> dict[str, Any]:
         self.db.ensure_connected()
-        user = await self.db.get_or_create_user(discord_id, username, generation)  # noqa
+        user = await self.db.get_or_create_user(  # noqa
+            discord_id, username, generation, nickname=nickname
+        )
 
         valid_code = await self.db.get_valid_attendance_code(session, code)
         if not valid_code:
