@@ -76,7 +76,7 @@ async def dao_attendance(interaction: discord.Interaction, session: int, code: s
     await interaction.followup.send(result["message"])
 
 
-@dao.command(name="내출석", description="내 출석 현황 조회")
+@dao.command(name="출석내역", description="내 출석 내역 조회")
 async def dao_my_attendance(interaction: discord.Interaction):
     await interaction.response.defer()
 
@@ -85,18 +85,23 @@ async def dao_my_attendance(interaction: discord.Interaction):
     await interaction.followup.send(result["message"])
 
 
-@dao.command(name="포인트", description="현재 포인트 및 감사 요약")
+@dao.command(name="포인트", description="현재 포인트 및 출석/감사 요약")
 async def dao_points(interaction: discord.Interaction):
     await interaction.response.defer()
 
     user_id = str(interaction.user.id)
     points = await db.get_user_points(user_id)
+    attendance_summary = await db.get_attendance_summary(user_id)
     gratitude_summary = await db.get_gratitude_summary(user_id)
 
     message_lines = [
         f"💰 **현재 포인트: {points:,}점**",
         "",
-        "**감사 현황:**",
+        "**1) 출석 내역:**",
+        f"• 총 출석: {attendance_summary['total_attendance']}회 (+{attendance_summary['points_from_attendance']:,}점)",
+        f"• 오늘 출석: {'완료 ✓' if attendance_summary['has_attended_today'] else '가능 ○'}",
+        "",
+        "**2) 감사 내역:**",
         f"• 오늘 감사: {'전송 완료 ✓' if gratitude_summary['has_sent_today'] else '전송 가능 ○'}",
         f"• 보낸 감사: {gratitude_summary['total_sent']}회 (+{gratitude_summary['points_from_sent']:,}점)",
         f"• 받은 감사: {gratitude_summary['total_received']}회 (+{gratitude_summary['points_from_received']:,}점)",
@@ -133,7 +138,7 @@ async def dao_gratitude_history(interaction: discord.Interaction):
 
 # Localize subcommand names for Korean UX
 dao_attendance.name_localizations = {"ko": "출석"}
-dao_my_attendance.name_localizations = {"ko": "내출석"}
+dao_my_attendance.name_localizations = {"ko": "출석내역"}
 dao_points.name_localizations = {"ko": "포인트"}
 dao_gratitude.name_localizations = {"ko": "감사"}
 dao_gratitude_history.name_localizations = {"ko": "감사내역"}
@@ -175,8 +180,8 @@ def _help_message() -> str:
         "",
         "**DAO 명령어**",
         "• /dao 출석 [회차] [코드] — 출석 체크 (+100점)",
-        "• /dao 내출석 — 내 출석 현황",
-        "• /dao 포인트 — 포인트 및 감사 요약",
+        "• /dao 내출석 — 내 출석 내역",
+        "• /dao 포인트 — 포인트 및 출석/감사 요약",
         "• /dao 감사 @대상 — 감사 보내기 (1일 1회, +10/+10)",
         "• /dao 감사내역 — 감사 내역",
         "",

@@ -301,5 +301,29 @@ class Database:
             "points_from_received": total_received * 10,
         }
 
+    async def get_attendance_summary(self, user_id: str) -> dict[str, Any]:
+        """Return quick stats for attendance activity.
+
+        - total_attendance: number of attendance records
+        - points_from_attendance: total points earned from attendance (100 each)
+        - has_attended_today: whether user already checked in today
+        """
+        self.ensure_connected()
+        total_attendance = self.attendance_collection.count_documents(
+            {"user_id": user_id}
+        )
+        has_attended_today = (
+            self.attendance_collection.find_one(
+                {"user_id": user_id, "date": today_kst_str()}
+            )
+            is not None
+        )
+
+        return {
+            "total_attendance": total_attendance,
+            "points_from_attendance": total_attendance * 100,
+            "has_attended_today": has_attended_today,
+        }
+
 
 db = Database()
