@@ -48,9 +48,17 @@ class DaoBot(commands.Bot):
         except Exception:
             # Fallback: ensure group is present before sync
             self.tree.add_command(dao)
-
-        await self.tree.sync()
-        print(f"Synced {len(self.tree.get_commands())} command(s)")
+        # 앱 기동 시 DAOLAB 길드에만 즉시 동기화 (전파 지연 회피)
+        try:
+            guild = discord.Object(id=settings.daolab_guild_id)
+            # 글로벌 커맨드를 지정 길드에 복사 후 길드 동기화 → 즉시 반영
+            self.tree.copy_global_to(guild=guild)
+            cmds = await self.tree.sync(guild=guild)
+            print(
+                f"Guild sync complete: {len(cmds)} command(s) → gid={settings.daolab_guild_id}"
+            )
+        except Exception as e:
+            print(f"Guild sync failed: {e}")
 
     async def on_ready(self):
         print(f"Logged in as {self.user} (ID: {self.user.id})")
@@ -177,13 +185,14 @@ def _help_message() -> str:
         "**일반**",
         "• /ping — 봇 및 DB 상태 확인",
         "• /help — 이 도움말 표시",
+        "• /도움말 — 이 도움말 표시",
         "",
         "**DAO 명령어**",
         "• /dao 출석 [회차] [코드] — 출석 체크 (+100점)",
-        "• /dao 내출석 — 내 출석 내역",
-        "• /dao 포인트 — 포인트 및 출석/감사 요약",
+        "• /dao 출석내역 — 내 출석 내역",
         "• /dao 감사 @대상 — 감사 보내기 (1일 1회, +10/+10)",
         "• /dao 감사내역 — 감사 내역",
+        "• /dao 포인트 — 포인트 및 출석/감사 요약",
         "",
         "**관리자**",
         "• /dao_admin 출석코드생성 [회차] [코드] — 출석 코드 생성",
@@ -223,6 +232,36 @@ async def ping_command(interaction: discord.Interaction):
 @bot.tree.command(name="help", description="명령어 도움말")
 async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(_help_message())
+
+
+@bot.tree.command(name="도움말", description="명령어 도움말")
+async def 도움말_command(interaction: discord.Interaction):
+    await interaction.response.send_message(_help_message())
+
+
+# --------- 수동 동기화 (prefix: !sync) ---------
+@bot.command(name="sync")
+async def sync_command(ctx: commands.Context, gid: int | None = None):
+    """명령어 트리 수동 동기화.
+
+    사용법:
+    - `!sync`           → 글로벌 동기화 (전파 지연 가능)
+    - `!sync <guildId>` → 해당 길드에 즉시 반영
+    - `!sync 0`         → settings.daolab_guild_id 사용
+    """
+    # gid가 주어지지 않으면 글로벌 동기화, 주어지면 길드 동기화
+    if gid is None:
+        cmds = await bot.tree.sync()
+        await ctx.send(f"Global sync: {len(cmds)} (전파 지연 가능)")
+        return
+
+    target_gid = settings.daolab_guild_id if gid == 0 else gid
+    guild = discord.Object(id=target_gid)
+
+    # 글로벌 커맨드도 해당 길드에 즉시 보이도록 복사 후 동기화
+    bot.tree.copy_global_to(guild=guild)
+    cmds = await bot.tree.sync(guild=guild)
+    await ctx.send(f"Guild sync: {len(cmds)} (gid={target_gid}) — 즉시 반영")
 
 
 def main():
