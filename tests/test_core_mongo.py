@@ -66,8 +66,9 @@ async def run_core_scenarios():
     attendance2 = await db.record_attendance_by_period(
         generation=6, week=1, day=1, user_id=test_user_id
     )
-    assert attendance2 is None, "중복 출석이 허용됨!"
-    print("   ✓ 중복 출석 차단 확인\n")
+    # 변경된 정책: 동일 주차/일차 중복 시 기존 기록을 반환 (idempotent)
+    assert attendance2 is not None, "기존 출석 레코드 반환 실패"
+    print("   ✓ 중복 출석 시 기존 레코드 반환(포인트 중복 없음) 확인\n")
 
     # 5. 모든 트랜잭션 불변성 확인
     print("5. 트랜잭션 불변성 및 조회")

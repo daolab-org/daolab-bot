@@ -61,14 +61,6 @@ class DaoBot(commands.Bot):
         - Day granularity is ignored; a user gets credit once per week when approved
         """
         try:
-            channel = await self.fetch_channel(payload.channel_id)
-            if isinstance(channel, discord.Thread):
-                # parent_ch_name = channel.parent
-                parent_ch_id = channel.parent_id
-
-            if parent_ch_id != settings.attendance_channel_id:
-                return
-
             # Ignore bot reactions
             if payload.user_id == (self.user.id if self.user else None):
                 return
@@ -91,19 +83,36 @@ class DaoBot(commands.Bot):
             if not (is_admin or has_role):
                 return
 
-            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            # Only handle reactions inside threads; week is parsed from thread name
+            channel = await self.fetch_channel(payload.channel_id)
+            if not isinstance(channel, discord.Thread):
                 return
 
-            # Fetch the reacted message (the attendee's reply)
+            # Ensure the bot can access the thread (especially for private threads)
+            try:
+                await channel.join()
+            except Exception:
+                # Joining may fail if already joined or not required; continue
+                pass
+
+            # Fetch the reacted message (the attendee's reply inside the thread)
             try:
                 msg = await channel.fetch_message(payload.message_id)
             except Exception:
-                return
+                # Retry once after attempting to join (helps with race conditions)
+                try:
+                    await channel.join()
+                except Exception:
+                    pass
+                try:
+                    msg = await channel.fetch_message(payload.message_id)
+                except Exception:
+                    return
 
             # Parse pattern like "6주차" (day is ignored for attendance purposes)
             import re
 
-            # Try to find week number in the channel name
+            # Extract week number from the thread name
             m = re.search(r"(\d+)\s*주차", channel.name)
             if not m:
                 return
@@ -143,6 +152,62 @@ class DaoBot(commands.Bot):
         except Exception as e:
             # Keep errors from crashing the bot; log minimal info
             print(f"on_raw_reaction_add error: {e}")
+
+    async def on_thread_create(self, thread: discord.Thread) -> None:
+        """Post a notice when an admin/manager creates an attendance thread.
+
+        If a thread name matches the pattern like "N주차" and the creator is an
+        admin or has the configured manager role, the bot joins the thread and
+        leaves a short message indicating it's monitoring the thread.
+        """
+        try:
+            guild = thread.guild
+            if guild is None:
+                return
+
+            # Validate creator permissions (admin or manager role)
+            owner_id = getattr(thread, "owner_id", None)
+            if owner_id is None:
+                return
+
+            member = guild.get_member(owner_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(owner_id)
+                except Exception:
+                    return
+
+            is_admin = getattr(member.guild_permissions, "administrator", False)
+            has_role = any(
+                r.id == settings.attendance_manager_role_id for r in member.roles
+            )
+            if not (is_admin or has_role):
+                return
+
+            # Check thread name pattern like "6주차"
+            import re
+
+            m = re.search(r"(\d+)\s*주차", thread.name)
+            if not m:
+                return
+
+            week = int(m.group(1))
+
+            # Try to join the thread (for private threads) and send a notice
+            try:
+                await thread.join()
+            except Exception:
+                pass
+
+            try:
+                await thread.send(
+                    f"안녕하세요! 출석 스레드를 인식했어요. 이 스레드에서 관리자가 리액션으로 승인하면 자동으로 출석이 기록됩니다. (주차: {week}주차)"
+                )
+            except Exception as e:
+                print(f"on_thread_create send error: {e}")
+                return
+        except Exception as e:
+            print(f"on_thread_create error: {e}")
 
 
 def create_bot() -> DaoBot:

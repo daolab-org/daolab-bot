@@ -197,6 +197,18 @@ class Database:
             await self.add_transaction(transaction)
             return attendance
         except DuplicateKeyError:
+            # Already recorded for (generation, week, day, user). Return the existing
+            # record to make admin approvals idempotent across multiple checks.
+            existing = self.attendance_collection.find_one(
+                {
+                    "generation": generation,
+                    "week": week,
+                    "day": day,
+                    "user_id": user_id,
+                }
+            )
+            if existing:
+                return Attendance(**existing)
             return None
 
     async def get_user_attendance_records(self, user_id: str) -> list[dict[str, Any]]:
