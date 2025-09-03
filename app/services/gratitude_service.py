@@ -36,7 +36,11 @@ class GratitudeService:
         if await self.db.check_gratitude_sent_today(from_discord_id):
             return {
                 "success": False,
-                "message": "❌ 오늘은 이미 감사를 보냈습니다. 내일 다시 시도해주세요.",
+                "message": (
+                    "❌ 오늘은 이미 감사를 보냈습니다.\n"
+                    "감사는 하루에 최대 10포인트까지 보낼 수 있어요.\n"
+                    "오늘은 감사를 모두 전했어요. 오늘의 감사한 마음을 내일 전해 보아요!"
+                ),
                 "already_sent": True,
             }
 
@@ -72,9 +76,7 @@ class GratitudeService:
             response = {
                 "success": True,
                 "message": (
-                    f"💝 **{_display(from_user)}**님이 **{_display(to_user)}**님에게 감사를 전했습니다!\n"
-                    f"• {_display(from_user)}: +10 포인트 (현재: {from_points:,}점)\n"
-                    f"• {_display(to_user)}: +10 포인트 (현재: {to_points:,}점)"
+                    f"💝 **{_display(from_user)}**님이 **{_display(to_user)}**님에게 감사를 전했습니다!"
                 ),
                 "from_user": {
                     "id": from_discord_id,
@@ -90,11 +92,16 @@ class GratitudeService:
                 },
             }
 
-            # Append message line if provided
+            # 강조: 감사 메시지 본문은 인용으로 표시
             if norm_message:
-                response["message"] = (
-                    response["message"] + "\n\n" + f"📝 메시지: {norm_message}"
-                )
+                response["message"] = response["message"] + "\n" + f'"{norm_message}"'
+
+            # 하루 1회(10포인트) 제한 안내를 함께 표시하여 재시도 혼선을 줄임
+            response["message"] = (
+                response["message"]
+                + "\n\n감사는 하루에 최대 10포인트까지 보낼 수 있어요.\n"
+                + "오늘은 감사를 모두 전했어요. 오늘의 감사한 마음을 내일 전해 보아요!"
+            )
 
             return response
         else:
