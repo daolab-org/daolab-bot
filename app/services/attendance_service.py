@@ -24,10 +24,11 @@ class AttendanceService:
             user_id, username, generation, nickname=nickname
         )
 
+        # 일 단위 구분은 사용하지 않으므로 day는 고정값(1)으로 처리한다.
         attendance = await self.db.record_attendance_by_period(
             generation=generation,
             week=week,
-            day=day,
+            day=1,
             user_id=user_id,
             channel_id=channel_id,
             announcement_message_id=announcement_message_id,
@@ -39,7 +40,7 @@ class AttendanceService:
             return {
                 "success": True,
                 "message": (
-                    f"✅ {generation}기 {week}주차 {day}일 출석 완료! (+100 포인트)\n"
+                    f"✅ {generation}기 {week}주차 출석 완료! (+100 포인트)\n"
                     f"현재 포인트: {new_points:,}점"
                 ),
                 "points_added": 100,
@@ -86,7 +87,7 @@ class AttendanceService:
 
         for record in attendance_list[-5:]:
             message_lines.append(
-                f"• {record['generation']}기 {record['week']}주차 {record['day']}일 ({record['date']})"
+                f"• {record['generation']}기 {record['week']}주차 ({record['date']})"
             )
 
         if len(attendance_list) > 5:

@@ -57,8 +57,8 @@ class DaoBot(commands.Bot):
         Flow:
         - Only in the configured attendance channel
         - Only when the reactor is admin or has the configured manager role
-        - The reacted message must be a reply to an announcement message whose content matches "X주차 Y일"
-        - The author of the reacted reply is credited attendance for the configured generation/week/day
+        - The reacted message must be in a channel/thread whose name contains "X주차"
+        - Day granularity is ignored; a user gets credit once per week when approved
         """
         try:
             channel = await self.fetch_channel(payload.channel_id)
@@ -100,19 +100,18 @@ class DaoBot(commands.Bot):
             except Exception:
                 return
 
-            # Parse pattern like "6주차 1일" (generation is configured per channel)
+            # Parse pattern like "6주차" (day is ignored for attendance purposes)
             import re
 
-            m = re.search(r".*(\d+)\s*주차.*(\d+)\s*일.*", channel.name)
+            # Try to find week number in the channel name
+            m = re.search(r"(\d+)\s*주차", channel.name)
             if not m:
                 return
             week = int(m.group(1))
-            day = int(m.group(2))
+            day = 1  # 일 단위는 미사용. 고정값으로 처리하여 주차 단위 출석만 인정
             generation = settings.attendance_generation
 
-            print(
-                f"Attendance reaction detected: gen={generation}, week={week}, day={day}"
-            )
+            print(f"Attendance reaction detected: gen={generation}, week={week}")
             # Credit attendance to the author of the reply message
             attendee_user = msg.author
             attendee_nickname = None

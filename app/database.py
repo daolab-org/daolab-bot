@@ -364,5 +364,84 @@ class Database:
             "users": users,
         }
 
+    async def get_attendance_overview(
+        self, generation: int, up_to_week: int
+    ) -> dict[str, Any]:
+        """Aggregate attendance from week 1..N (inclusive) for admin overview.
+
+        Returns a structure suitable for presenting:
+        - weekly_counts: list[{week, count}] — unique participants per week
+        - total_attendance: sum of weekly unique counts
+        - participants: list[{user_id, weeks: [int]}] — weeks attended by user
+        - nicknames: mapping user_id -> nickname/username
+        - unique_participants: count of unique users across all weeks
+        """
+        self.ensure_connected()
+
+        # Unique participants per (week, user)
+        match = {"generation": generation, "week": {"$lte": up_to_week}}
+
+        # 1) Weekly unique counts
+        weekly_counts_pipeline = [
+            {"$match": match},
+            {"$group": {"_id": {"week": "$week", "user_id": "$user_id"}}},
+            {"$group": {"_id": "$_id.week", "count": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+        ]
+        weekly_counts = [
+            {"week": doc["_id"], "count": doc["count"]}
+            for doc in self.attendance_collection.aggregate(weekly_counts_pipeline)
+        ]
+
+        # Fill missing weeks with zero
+        have_weeks = {w["week"] for w in weekly_counts}
+        for w in range(1, up_to_week + 1):
+            if w not in have_weeks:
+                weekly_counts.append({"week": w, "count": 0})
+        weekly_counts = sorted(weekly_counts, key=lambda x: x["week"])
+
+        # 2) Per-user weeks attended
+        per_user_pipeline = [
+            {"$match": match},
+            {"$group": {"_id": "$user_id", "weeks": {"$addToSet": "$week"}}},
+            {"$sort": {"_id": 1}},
+        ]
+        per_user_docs = list(self.attendance_collection.aggregate(per_user_pipeline))
+        participants = [
+            {"user_id": doc["_id"], "weeks": sorted(doc.get("weeks", []))}
+            for doc in per_user_docs
+        ]
+
+        # 3) Nickname map
+        user_ids = [p["user_id"] for p in participants]
+        nickname_map: dict[str, str] = {}
+        if user_ids:
+            cursor = self.users_collection.find({"discord_id": {"$in": user_ids}})
+            for u in cursor:
+                nickname = u.get("nickname") or u.get("username") or u.get("discord_id")
+                nickname_map[u.get("discord_id")] = nickname
+
+        total_attendance = sum(item["count"] for item in weekly_counts)
+        unique_participants = len(participants)
+
+        # 4) Overall participation rate among those who ever attended (union set)
+        if unique_participants > 0 and up_to_week > 0:
+            attended_slots = sum(len(p["weeks"]) for p in participants)
+            possible_slots = unique_participants * up_to_week
+            overall_rate = round(attended_slots / possible_slots * 100, 1)
+        else:
+            overall_rate = 0.0
+
+        return {
+            "generation": generation,
+            "up_to_week": up_to_week,
+            "weekly_counts": weekly_counts,
+            "total_attendance": total_attendance,
+            "unique_participants": unique_participants,
+            "overall_rate": overall_rate,
+            "participants": participants,
+            "nicknames": nickname_map,
+        }
+
 
 db = Database()

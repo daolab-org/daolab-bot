@@ -130,7 +130,7 @@ def register_commands(bot: commands.Bot) -> None:
             "• /도움말 — 이 도움말 표시",
             "",
             "**DAO 명령어**",
-            "• 출석: 공지(예: `6주차 1일`)에 댓글 달면, 관리자가 이모지 반응으로 승인할 때 적립됩니다.",
+            "• 출석: 공지(예: `6주차`)에 댓글 달면, 관리자가 이모지 반응으로 승인할 때 적립됩니다. (주차당 1회 인정)",
             "• /dao 출석내역 — 내 출석 내역",
             "• /dao 감사 @대상 [메시지] — 감사 보내기 (1일 1회, +10p/+10p)",
             "• /dao 감사내역 — 감사 내역",
@@ -196,28 +196,49 @@ def register_commands(bot: commands.Bot) -> None:
                 )
                 return
 
-            summary = await db.get_weekly_attendance(generation, week)
+            overview = await db.get_attendance_overview(generation, week)
+
+            # Header
             lines: list[str] = []
-            lines.append(
-                f"📅 **{generation}기 {week}주차 출석 현황** (고유 인원 {summary['total_attendees']}명)"
+            lines.append(f"📅 {generation}기 — {week}주차 기준 출석 현황")
+
+            # Weekly totals
+            weekly_str = ", ".join(
+                [
+                    f"{item['week']}주차: {item['count']}명"
+                    for item in overview["weekly_counts"]
+                ]
             )
-            if summary["by_day"]:
-                day_str = ", ".join(
-                    [
-                        f"{item['day']}일: {item['count']}건"
-                        for item in summary["by_day"]
-                    ]
-                )
-                lines.append(f"• 일별 합계: {day_str}")
-            if summary["users"]:
+            lines.append(f"• 주차별 총 참여자 수: {weekly_str}")
+            lines.append(
+                f"• 누적 참여 횟수: {overview['total_attendance']}건 (고유 인원 {overview['unique_participants']}명)"
+            )
+            lines.append(f"• 전체 참여율: {overview['overall_rate']}%")
+
+            # Per-user matrix, nickname-based, no mentions
+            participants = overview["participants"]
+            nicknames = overview["nicknames"]
+            if participants:
                 lines.append("")
-                lines.append("**참여자 요약 (일차):**")
-                # Limit to 30 lines for readability
-                for user in summary["users"][:30]:
-                    days = ", ".join(str(d) for d in user["days"]) or "-"
-                    lines.append(f"• <@{user['user_id']}> — {days}")
-                if len(summary["users"]) > 30:
-                    lines.append(f"... 외 {len(summary['users']) - 30}명")
+                lines.append("**개인별 출석 현황:**")
+                # Sort by nickname for readability
+                participants_sorted = sorted(
+                    participants,
+                    key=lambda p: (nicknames.get(p["user_id"], p["user_id"]).lower()),
+                )
+                max_rows = 50  # limit for Discord message length
+                for p in participants_sorted[:max_rows]:
+                    name = nicknames.get(
+                        p["user_id"], p["user_id"]
+                    )  # nickname/username
+                    attended = set(p.get("weeks", []))
+                    marks = []
+                    for w in range(1, week + 1):
+                        marks.append(f"{w}주차 {'✅' if w in attended else '❌'}")
+                    lines.append(f"• {name} — {', '.join(marks)}")
+                if len(participants_sorted) > max_rows:
+                    lines.append(f"... 외 {len(participants_sorted) - max_rows}명")
+
             await interaction.followup.send("\n".join(lines))
 
     # --------- 수동 동기화 (prefix: !sync) ---------
