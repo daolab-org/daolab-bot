@@ -166,7 +166,7 @@ class DaoBot(commands.Bot):
         """Handle reaction-based attendance approval.
 
         Flow:
-        - Only in the configured attendance channel
+        - Only for threads under the configured attendance channel
         - Only when the reactor is admin or has the configured manager role
         - The reacted message must be in a channel/thread whose name contains "X주차"
         - Day granularity is ignored; a user gets credit once per week when approved
@@ -197,6 +197,12 @@ class DaoBot(commands.Bot):
             # Only handle reactions inside threads; week is parsed from thread name
             channel = await self.fetch_channel(payload.channel_id)
             if not isinstance(channel, discord.Thread):
+                return
+
+            # Restrict to threads created under the attendance channel
+            parent = getattr(channel, "parent", None)
+            parent_id = getattr(parent, "id", None)
+            if parent_id != settings.attendance_channel_id:
                 return
 
             # Ensure the bot can access the thread (especially for private threads)
@@ -265,15 +271,21 @@ class DaoBot(commands.Bot):
             print(f"on_raw_reaction_add error: {e}")
 
     async def on_thread_create(self, thread: discord.Thread) -> None:
-        """Post a notice when an admin/manager creates an attendance thread.
+        """Post a notice only for attendance-channel threads.
 
-        If a thread name matches the pattern like "N주차" and the creator is an
-        admin or has the configured manager role, the bot joins the thread and
-        leaves a short message indicating it's monitoring the thread.
+        If a thread is created under `attendance_channel_id`, its name matches
+        "N주차", and the creator is an admin or has the configured manager role,
+        the bot joins the thread and leaves a short monitoring notice.
         """
         try:
             guild = thread.guild
             if guild is None:
+                return
+
+            # Restrict to threads under the configured attendance channel
+            parent = getattr(thread, "parent", None)
+            parent_id = getattr(parent, "id", None)
+            if parent_id != settings.attendance_channel_id:
                 return
 
             # Validate creator permissions (admin or manager role)
