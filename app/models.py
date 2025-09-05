@@ -107,7 +107,10 @@ class Gratitude(BaseModel):
     from_user_id: str = Field(..., description="감사를 보낸 유저")
     to_user_id: str = Field(..., description="감사를 받은 유저")
     date: str = Field(..., description="날짜 (YYYY-MM-DD)")
-    points: int = Field(default=10, description="감사 포인트")
+    # Per-send gratitude points (per user)
+    points: int = Field(default=5, description="감사 포인트 (1회당)")
+    # Daily slot (1 or 2). Enables up to 2 sends per day.
+    slot: int | None = Field(None, description="일일 전송 회차 (1..2)")
     message: str | None = Field(
         None, max_length=200, description="감사 전달 메시지 (선택)"
     )

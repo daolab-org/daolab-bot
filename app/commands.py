@@ -49,14 +49,14 @@ def register_commands(bot: commands.Bot) -> None:
             f"• 오늘 출석: {'완료 ✓' if attendance_summary['has_attended_today'] else '가능 ○'}",
             "",
             "**2) 감사 내역:**",
-            f"• 오늘 감사: {'전송 완료 ✓' if gratitude_summary['has_sent_today'] else '전송 가능 ○'}",
+            f"• 오늘 감사: {gratitude_summary.get('sent_today_count', 0)}/2",
             f"• 보낸 감사: {gratitude_summary['total_sent']}회 (+{gratitude_summary['points_from_sent']:,} point)",
             f"• 받은 감사: {gratitude_summary['total_received']}회 (+{gratitude_summary['points_from_received']:,} point)",
         ]
 
         await interaction.followup.send("\n".join(message_lines))
 
-    @dao.command(name="감사", description="감사 보내기 (+10p)")
+    @dao.command(name="감사", description="감사 보내기 (1회 +5p/+5p, 하루 2회)")
     @app_commands.describe(
         target="감사를 보낼 대상", message="상대에게 전할 메시지 (선택)"
     )
@@ -132,7 +132,7 @@ def register_commands(bot: commands.Bot) -> None:
             "**DAO 명령어**",
             "• 출석: 공지(예: `6주차`)에 댓글 달면, 관리자가 이모지 반응으로 승인할 때 적립됩니다. (주차당 1회 인정)",
             "• /dao 출석내역 — 내 출석 내역",
-            "• /dao 감사 @대상 [메시지] — 감사 보내기 (1일 1회, +10p/+10p)",
+            "• /dao 감사 @대상 [메시지] — 감사 보내기 (하루 2회, 1회당 +5p/+5p)",
             "• /dao 감사내역 — 감사 내역",
             "• /dao 포인트 — 포인트 및 출석/감사 요약",
             "",

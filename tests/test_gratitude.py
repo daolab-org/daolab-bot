@@ -46,6 +46,17 @@ async def _gratitude_module_setup_teardown():
             pass
 
     db.connect()
+
+    # Ensure legacy unique index (from_user_id, date) is removed to allow 2/day
+    try:
+        for idx in db.gratitude_collection.list_indexes():
+            key = list(idx.get("key", {}).items())
+            if idx.get("unique") and key == [("from_user_id", 1), ("date", 1)]:
+                db.gratitude_collection.drop_index(idx["name"])
+                break
+    except Exception:
+        pass
+
     await cleanup_test_data()
     yield
     await cleanup_test_data()
@@ -65,13 +76,13 @@ async def test_gratitude_send_success():
 
     assert result["success"]
     assert "감사를 전했습니다" in result["message"]
-    assert result["from_user"]["points_added"] == 10
-    assert result["to_user"]["points_added"] == 10
+    assert result["from_user"]["points_added"] == 5
+    assert result["to_user"]["points_added"] == 5
 
     from_points = await db.get_user_points(from_id)
     to_points = await db.get_user_points(to_id)
-    assert from_points == 10
-    assert to_points == 10
+    assert from_points == 5
+    assert to_points == 5
 
     print("✓ Gratitude sent successfully")
     print(f"  From user points: {from_points}")
@@ -79,19 +90,27 @@ async def test_gratitude_send_success():
 
 
 async def test_gratitude_daily_limit():
-    """Test daily limit (1 per day)"""
+    """Test daily limit (2 per day)"""
     print("\n[Test 2] Testing daily limit...")
 
     from_id = "123456789012345678"
     to_id = "123456789012345680"
 
+    # Second send should succeed (2/2)
     result = await gratitude_service.send_gratitude(
         from_id, "TestUser1", to_id, "TestUser3"
     )
 
-    assert not result["success"]
-    assert "이미 감사를 보냈습니다" in result["message"]
-    assert result["already_sent"]
+    assert result["success"]
+    assert "감사를 전했습니다" in result["message"]
+
+    # Third send should be blocked (exceeds 2/day)
+    result_block = await gratitude_service.send_gratitude(
+        from_id, "TestUser1", "123456789012345679", "TestUser2"
+    )
+    assert not result_block["success"]
+    assert "한도를 모두 사용" in result_block["message"]
+    assert result_block["already_sent"]
 
     print("✓ Daily limit enforced correctly")
 
@@ -119,7 +138,8 @@ async def test_gratitude_history():
     result = await gratitude_service.get_gratitude_history("123456789012345678")
 
     assert result["success"]
-    assert result["total_sent"] == 1  # Sent 1 gratitude in test 1
+    # Sent 2 gratitudes (tests 1 and 2)
+    assert result["total_sent"] == 2
     assert result["has_sent_today"]
     assert "감사 내역" in result["message"]
 
@@ -134,7 +154,7 @@ async def test_gratitude_stats():
 
     stats = await gratitude_service.get_gratitude_stats("123456789012345678")
 
-    assert stats["total_sent"] == 1
+    assert stats["total_sent"] == 2
     assert stats["has_sent_today"]
     assert stats["points_from_sent"] == 10
 
@@ -149,7 +169,7 @@ async def test_gratitude_summary_in_db():
 
     summary = await db.get_gratitude_summary("123456789012345678")
 
-    assert summary["total_sent"] == 1
+    assert summary["total_sent"] == 2
     assert summary["total_received"] == 0
     assert summary["has_sent_today"]
     assert summary["points_from_sent"] == 10
@@ -169,7 +189,7 @@ async def test_gratitude_received():
     assert summary["total_received"] == 1  # Received from test_user_1 in test 1
     assert not summary["has_sent_today"]
     assert summary["points_from_sent"] == 0
-    assert summary["points_from_received"] == 10
+    assert summary["points_from_received"] == 5
 
     print("✓ Gratitude received tracked correctly")
     print(f"  Total received: {summary['total_received']}")

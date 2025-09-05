@@ -33,13 +33,15 @@ class GratitudeService:
             to_discord_id, to_username, generation, nickname=to_nickname
         )
 
-        if await self.db.check_gratitude_sent_today(from_discord_id):
+        # Enforce new quota: up to 2 sends/day
+        sent_today = await self.db.count_gratitude_sent_today(from_discord_id)
+        if sent_today >= 2:
             return {
                 "success": False,
                 "message": (
-                    "❌ 오늘은 이미 감사를 보냈습니다.\n"
-                    "감사는 하루에 최대 10포인트까지 보낼 수 있어요.\n"
-                    "오늘은 감사를 모두 전했어요. 오늘의 감사한 마음을 내일 전해 보아요!"
+                    "❌ 오늘은 감사 전송 한도를 모두 사용했어요.\n"
+                    "감사는 하루에 최대 2회, 1회당 +5p/+5p 적립됩니다.\n"
+                    "내일 다시 따뜻한 마음을 전해 보아요!"
                 ),
                 "already_sent": True,
             }
@@ -62,6 +64,9 @@ class GratitudeService:
         if gratitude:
             from_points = await self.db.get_user_points(from_discord_id)
             to_points = await self.db.get_user_points(to_discord_id)
+            # Recompute count after successful send
+            sent_today_after = await self.db.count_gratitude_sent_today(from_discord_id)
+            remaining_today = max(0, 2 - sent_today_after)
 
             def _display(u) -> str:
                 try:
@@ -81,13 +86,13 @@ class GratitudeService:
                 "from_user": {
                     "id": from_discord_id,
                     "username": from_user.username,
-                    "points_added": 10,
+                    "points_added": 5,
                     "total_points": from_points,
                 },
                 "to_user": {
                     "id": to_discord_id,
                     "username": to_user.username,
-                    "points_added": 10,
+                    "points_added": 5,
                     "total_points": to_points,
                 },
             }
@@ -96,11 +101,11 @@ class GratitudeService:
             if norm_message:
                 response["message"] = response["message"] + "\n" + f'"{norm_message}"'
 
-            # 하루 1회(10포인트) 제한 안내를 함께 표시하여 재시도 혼선을 줄임
+            # 안내: 1회당 +5p/+5p, 하루 2회 제한 및 남은 횟수 표시
             response["message"] = (
                 response["message"]
-                + "\n\n감사는 하루에 최대 10포인트까지 보낼 수 있어요.\n"
-                + "오늘은 감사를 모두 전했어요. 오늘의 감사한 마음을 내일 전해 보아요!"
+                + "\n\n감사는 하루 최대 2회 보낼 수 있어요 (1회당 +5p/+5p).\n"
+                + f"오늘 남은 가능 횟수: {remaining_today}회"
             )
 
             return response
@@ -166,13 +171,14 @@ class GratitudeService:
             {"to_user_id": discord_id}
         )
 
-        has_sent_today = await self.db.check_gratitude_sent_today(discord_id)
+        sent_today_count = await self.db.count_gratitude_sent_today(discord_id)
+        has_sent_today = sent_today_count >= 1
 
         message_lines = [
             "💝 **감사 내역**",
-            f"• 보낸 감사: {total_sent}회 (+{total_sent * 10:,}점)",
-            f"• 받은 감사: {total_received}회 (+{total_received * 10:,}점)",
-            f"• 오늘 감사 전송: {'완료 ✓' if has_sent_today else '가능 ○'}",
+            f"• 보낸 감사: {total_sent}회 (+{total_sent * 5:,}점)",
+            f"• 받은 감사: {total_received}회 (+{total_received * 5:,}점)",
+            f"• 오늘 감사 전송: {sent_today_count}/2",
             "",
         ]
 
@@ -234,8 +240,8 @@ class GratitudeService:
             "total_sent": total_sent,
             "total_received": total_received,
             "has_sent_today": has_sent_today,
-            "points_from_sent": total_sent * 10,
-            "points_from_received": total_received * 10,
+            "points_from_sent": total_sent * 5,
+            "points_from_received": total_received * 5,
             "top_recipients": top_recipients,
         }
 

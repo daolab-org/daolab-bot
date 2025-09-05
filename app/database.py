@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Awaitable, Callable
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 from app.settings import settings
@@ -15,6 +15,8 @@ class Database:
         self.transactions_collection = None
         self.attendance_collection = None
         self.gratitude_collection = None
+        # Async observers notified whenever a Transaction is added
+        self._transaction_observers: list[Callable[[Transaction], Awaitable[None]]] = []
 
     def connect(self):
         url = f"mongodb://{settings.mongo_user}:{settings.mongo_pass}@{settings.mongo_host}:{settings.mongo_port}"
@@ -63,9 +65,24 @@ class Database:
         self.attendance_collection.create_index("date")
 
         self.gratitude_collection.create_index(
-            [("from_user_id", ASCENDING), ("date", ASCENDING)], unique=True
+            # Allow up to 2 sends per day by including a slot field in uniqueness
+            [("from_user_id", ASCENDING), ("date", ASCENDING), ("slot", ASCENDING)],
+            unique=True,
         )
         self.gratitude_collection.create_index("to_user_id")
+
+    def add_transaction_observer(
+        self, observer: Callable[[Transaction], Awaitable[None]]
+    ) -> None:
+        """Register an async observer to be notified on new transactions."""
+        self._transaction_observers.append(observer)
+
+    async def _notify_transaction_observers(self, transaction: Transaction) -> None:
+        for obs in list(self._transaction_observers):
+            try:
+                await obs(transaction)
+            except Exception as e:  # pragma: no cover
+                print(f"Transaction observer error: {e}")
 
     def close(self):
         if self.client:
@@ -140,7 +157,8 @@ class Database:
         transaction.id = result.inserted_id
 
         await self.update_user_points(transaction.user_id, transaction.points)
-
+        # Publish to observers (e.g., Discord channel)
+        await self._notify_transaction_observers(transaction)
         return transaction
 
     async def check_attendance_exists(self, session: int, user_id: str) -> bool:
@@ -239,10 +257,18 @@ class Database:
     async def check_gratitude_sent_today(self, from_user_id: str) -> bool:
         self.ensure_connected()
         today = today_kst_str()
-        existing = self.gratitude_collection.find_one(
+        # True if at least one gratitude was sent today
+        count = self.gratitude_collection.count_documents(
             {"from_user_id": from_user_id, "date": today}
         )
-        return existing is not None
+        return count >= 1
+
+    async def count_gratitude_sent_today(self, from_user_id: str) -> int:
+        self.ensure_connected()
+        today = today_kst_str()
+        return self.gratitude_collection.count_documents(
+            {"from_user_id": from_user_id, "date": today}
+        )
 
     async def send_gratitude(
         self, from_user_id: str, to_user_id: str, message: str | None = None
@@ -251,7 +277,9 @@ class Database:
         if from_user_id == to_user_id:
             raise ValueError("Cannot send gratitude to yourself")
 
-        if await self.check_gratitude_sent_today(from_user_id):
+        # New daily limit: up to 2 sends per day
+        sent_count = await self.count_gratitude_sent_today(from_user_id)
+        if sent_count >= 2:
             return None
 
         today = today_kst_str()
@@ -259,6 +287,7 @@ class Database:
             from_user_id=from_user_id,
             to_user_id=to_user_id,
             date=today,
+            slot=sent_count + 1,
             message=message.strip()
             if isinstance(message, str) and message.strip()
             else None,
@@ -272,7 +301,7 @@ class Database:
 
             from_transaction = Transaction(
                 user_id=from_user_id,
-                points=10,
+                points=5,
                 reason="감사줌",
                 from_user_id=from_user_id,
                 to_user_id=to_user_id,
@@ -281,7 +310,7 @@ class Database:
 
             to_transaction = Transaction(
                 user_id=to_user_id,
-                points=10,
+                points=5,
                 reason="감사받음",
                 from_user_id=from_user_id,
                 to_user_id=to_user_id,
@@ -300,14 +329,17 @@ class Database:
         total_received = self.gratitude_collection.count_documents(
             {"to_user_id": user_id}
         )
-        has_sent_today = await self.check_gratitude_sent_today(user_id)
+        sent_today_count = await self.count_gratitude_sent_today(user_id)
+        has_sent_today = sent_today_count >= 1
 
         return {
             "total_sent": total_sent,
             "total_received": total_received,
             "has_sent_today": has_sent_today,
-            "points_from_sent": total_sent * 10,
-            "points_from_received": total_received * 10,
+            "sent_today_count": sent_today_count,
+            "remaining_today": max(0, 2 - sent_today_count),
+            "points_from_sent": total_sent * 5,
+            "points_from_received": total_received * 5,
         }
 
     async def get_attendance_summary(self, user_id: str) -> dict[str, Any]:
@@ -393,45 +425,42 @@ class Database:
         # Unique participants per (week, user)
         match = {"generation": generation, "week": {"$lte": up_to_week}}
 
-        # 1) Weekly unique counts
-        weekly_counts_pipeline = [
-            {"$match": match},
-            {"$group": {"_id": {"week": "$week", "user_id": "$user_id"}}},
-            {"$group": {"_id": "$_id.week", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}},
-        ]
-        weekly_counts = [
-            {"week": doc["_id"], "count": doc["count"]}
-            for doc in self.attendance_collection.aggregate(weekly_counts_pipeline)
-        ]
-
-        # Fill missing weeks with zero
-        have_weeks = {w["week"] for w in weekly_counts}
-        for w in range(1, up_to_week + 1):
-            if w not in have_weeks:
-                weekly_counts.append({"week": w, "count": 0})
-        weekly_counts = sorted(weekly_counts, key=lambda x: x["week"])
-
-        # 2) Per-user weeks attended
+        # 1) Per-user weeks attended
         per_user_pipeline = [
             {"$match": match},
             {"$group": {"_id": "$user_id", "weeks": {"$addToSet": "$week"}}},
             {"$sort": {"_id": 1}},
         ]
         per_user_docs = list(self.attendance_collection.aggregate(per_user_pipeline))
-        participants = [
+        participants_all = [
             {"user_id": doc["_id"], "weeks": sorted(doc.get("weeks", []))}
             for doc in per_user_docs
         ]
 
-        # 3) Nickname map
-        user_ids = [p["user_id"] for p in participants]
-        nickname_map: dict[str, str] = {}
-        if user_ids:
-            cursor = self.users_collection.find({"discord_id": {"$in": user_ids}})
+        # 2) Nickname map and filter tests
+        user_ids_all = [p["user_id"] for p in participants_all]
+        nickname_map_all: dict[str, str] = {}
+        from app.filters import is_test_user_doc
+
+        test_user_ids: set[str] = set()
+        if user_ids_all:
+            cursor = self.users_collection.find({"discord_id": {"$in": user_ids_all}})
             for u in cursor:
                 nickname = u.get("nickname") or u.get("username") or u.get("discord_id")
-                nickname_map[u.get("discord_id")] = nickname
+                uid = u.get("discord_id")
+                nickname_map_all[uid] = nickname
+                if is_test_user_doc(u):
+                    test_user_ids.add(uid)
+
+        participants = [
+            p for p in participants_all if p["user_id"] not in test_user_ids
+        ]
+
+        # 3) Weekly unique counts recomputed from filtered participants
+        weekly_counts = []
+        for w in range(1, up_to_week + 1):
+            count = sum(1 for p in participants if w in set(p.get("weeks", [])))
+            weekly_counts.append({"week": w, "count": count})
 
         total_attendance = sum(item["count"] for item in weekly_counts)
         unique_participants = len(participants)
@@ -452,7 +481,10 @@ class Database:
             "unique_participants": unique_participants,
             "overall_rate": overall_rate,
             "participants": participants,
-            "nicknames": nickname_map,
+            "nicknames": {
+                p["user_id"]: nickname_map_all.get(p["user_id"], p["user_id"])
+                for p in participants
+            },
         }
 
 

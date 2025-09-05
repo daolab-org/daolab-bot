@@ -5,6 +5,8 @@ from discord.ext import commands
 
 from app.database import db
 from app.settings import settings
+from app.models import Transaction
+from app.filters import is_test_like_name
 
 
 def _build_intents() -> discord.Intents:
@@ -44,10 +46,119 @@ class DaoBot(commands.Bot):
         except Exception as e:  # pragma: no cover - best-effort logging
             print(f"Guild sync failed: {e}")
 
+        # Register transaction publisher observer
+        async def _observer(tx: Transaction) -> None:
+            try:
+                await self._publish_transaction(tx)
+            except Exception as e:
+                print(f"Transaction publish error: {e}")
+
+        db.add_transaction_observer(_observer)
+
     async def on_ready(self) -> None:
         assert self.user is not None
         print(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
+
+    async def _publish_transaction(self, tx: Transaction) -> None:
+        """Publish a transaction to the configured channel, skipping test data."""
+        # Resolve primary user
+        user_doc = db.users_collection.find_one({"discord_id": tx.user_id})
+        username = (
+            user_doc.get("nickname") or user_doc.get("username") if user_doc else None
+        )
+
+        # For gratitude, resolve the counterparty too
+        from_doc = (
+            db.users_collection.find_one({"discord_id": tx.from_user_id})
+            if tx.from_user_id
+            else None
+        )
+        to_doc = (
+            db.users_collection.find_one({"discord_id": tx.to_user_id})
+            if tx.to_user_id
+            else None
+        )
+
+        # Skip if any related user is a test account
+        if is_test_like_name(username):
+            return
+        if from_doc is not None and is_test_like_name(
+            from_doc.get("nickname") or from_doc.get("username")
+        ):
+            return
+        if to_doc is not None and is_test_like_name(
+            to_doc.get("nickname") or to_doc.get("username")
+        ):
+            return
+
+        # Resolve channel
+        channel = self.get_channel(settings.transaction_channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(settings.transaction_channel_id)
+            except Exception:
+                channel = None
+        if channel is None:
+            return
+
+        # Compose message by reason
+        reason = tx.reason
+        pts = tx.points
+        sign = "+" if pts >= 0 else ""
+
+        # Fetch current points of affected user
+        try:
+            total = await db.get_user_points(tx.user_id)
+        except Exception:
+            total = None
+
+        # Mentions
+        mention_user = f"<@{tx.user_id}>"
+        from_mention = f"<@{tx.from_user_id}>" if tx.from_user_id else None
+        to_mention = f"<@{tx.to_user_id}>" if tx.to_user_id else None
+
+        if reason == "출석":
+            msg = f"📝 [출석] {sign}{pts}p → {mention_user}"
+            if total is not None:
+                msg += f" (총 {total:,}p)"
+        elif reason == "감사줌":
+            # From user sent gratitude (tx.user_id == from_user_id)
+            arrow = (
+                f"{from_mention} → {to_mention}"
+                if from_mention and to_mention
+                else mention_user
+            )
+            msg = f"💝 [감사 전송] {sign}{pts}p — {arrow}"
+            if total is not None:
+                msg += f" (보낸 사람 {total:,}p)"
+        elif reason == "감사받음":
+            arrow = (
+                f"{from_mention} → {to_mention}"
+                if from_mention and to_mention
+                else mention_user
+            )
+            msg = f"💝 [감사 수신] {sign}{pts}p — {arrow}"
+            if total is not None:
+                msg += f" (받은 사람 {total:,}p)"
+        elif reason == "관리자지급":
+            msg = f"⚙️ [관리자 지급] {sign}{pts}p → {mention_user}"
+            if total is not None:
+                msg += f" (총 {total:,}p)"
+        elif reason == "관리자회수":
+            msg = f"⚙️ [관리자 회수] {sign}{pts}p → {mention_user}"
+            if total is not None:
+                msg += f" (총 {total:,}p)"
+        else:
+            msg = f"📒 [{reason}] {sign}{pts}p → {mention_user}"
+            if total is not None:
+                msg += f" (총 {total:,}p)"
+
+        try:
+            # type: ignore[attr-defined]
+            await channel.send(msg)
+        except Exception as e:
+            print(f"Failed to send transaction message: {e}")
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
