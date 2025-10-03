@@ -167,7 +167,7 @@ class DaoBot(commands.Bot):
 
         Flow:
         - Only for threads under the configured attendance channel
-        - Only when the reactor is admin or has the configured manager role
+        - Only when the reactor is admin or has one of the configured manager roles
         - The reacted message must be in a channel/thread whose name contains "X주차"
         - Day granularity is ignored; a user gets credit once per week when approved
         """
@@ -189,7 +189,7 @@ class DaoBot(commands.Bot):
 
             is_admin = getattr(member.guild_permissions, "administrator", False)
             has_role = any(
-                r.id == settings.attendance_manager_role_id for r in member.roles
+                r.id in settings.attendance_manager_role_ids for r in member.roles
             )
             if not (is_admin or has_role):
                 return
@@ -274,7 +274,7 @@ class DaoBot(commands.Bot):
         """Post a notice only for attendance-channel threads.
 
         If a thread is created under `attendance_channel_id`, its name matches
-        "N주차", and the creator is an admin or has the configured manager role,
+        "N주차", and the creator is an admin or has one of the configured manager roles,
         the bot joins the thread and leaves a short monitoring notice.
         """
         try:
@@ -302,7 +302,7 @@ class DaoBot(commands.Bot):
 
             is_admin = getattr(member.guild_permissions, "administrator", False)
             has_role = any(
-                r.id == settings.attendance_manager_role_id for r in member.roles
+                r.id in settings.attendance_manager_role_ids for r in member.roles
             )
             if not (is_admin or has_role):
                 return

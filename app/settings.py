@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     transaction_channel_id: int = 1412842871635316867
     # Attendance settings
     attendance_channel_id: int = 1412500749702791239  # 1409906888203571210
-    attendance_manager_role_id: int = 1405882704825679984
+    attendance_manager_role_ids: tuple[int, ...] = (
+        1405883481812373564,  # 관리자 역할
+        1423336658744639549,  # 출석체크 역할
+    )
     attendance_generation: int = 6
 
 
