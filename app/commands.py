@@ -447,7 +447,6 @@ def register_commands(bot: commands.Bot) -> None:
                 discord_id=target_id,
                 username=target_username,
                 nickname=target_nickname,
-                generation=settings.attendance_generation,
             )
 
             # Get current points
