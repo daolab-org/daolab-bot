@@ -88,19 +88,6 @@ class Attendance(BaseModel):
     checked_at: datetime = Field(default_factory=now_kst)
 
 
-class AttendanceCode(BaseModel):
-    """Deprecated: 유지보수를 위해 남겨두지만 더 이상 사용하지 않음."""
-
-    model_config = ConfigDict(populate_by_name=True)
-    id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
-    session: int = Field(0, description="레거시 회차")
-    code: str = Field("", description="레거시 출석 코드")
-    created_by: str | None = Field(None, description="레거시 생성자")
-    is_active: bool = Field(default=False, description="레거시 활성화 여부")
-    created_at: datetime = Field(default_factory=now_kst)
-    expires_at: datetime | None = Field(None, description="레거시 만료 시간")
-
-
 class Gratitude(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: PyObjectId | None = Field(default_factory=PyObjectId, alias="_id")
