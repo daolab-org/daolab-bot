@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.database import db
+from app.models import Transaction
 from app.settings import settings
 from app.services.attendance_service import attendance_service
 from app.services.gratitude_service import gratitude_service
@@ -138,6 +139,10 @@ def register_commands(bot: commands.Bot) -> None:
             "",
             "**관리자**",
             "• /dao_admin 출석현황 [기수] [주차] — 주차별 출석 집계",
+            "• /dao_admin 6기불러오기 — 6기 역할을 가진 멤버 목록 조회",
+            "• /dao_admin 6기포인트집계 — 6기 전체 포인트 집계 (닉네임 순)",
+            "• /dao_admin 지급 @유저 [수량] [사유] — 특정 유저에게 포인트 지급",
+            "• /dao_admin 회수 @유저 [수량] [사유] — 특정 유저로부터 포인트 회수",
         ]
         return "\n".join(lines)
 
@@ -176,9 +181,22 @@ def register_commands(bot: commands.Bot) -> None:
 
     # --------- 관리자 명령어 ---------
     @bot.tree.command(name="dao_admin", description="DAO 관리자 명령어")
-    @app_commands.describe(action="수행할 작업", generation="기수", week="주차")
+    @app_commands.describe(
+        action="수행할 작업",
+        generation="기수",
+        week="주차",
+        target="대상 유저",
+        amount="포인트 수량 (양수)",
+        reason="사유",
+    )
     @app_commands.choices(
-        action=[app_commands.Choice(name="출석현황", value="weekly_summary")]
+        action=[
+            app_commands.Choice(name="출석현황", value="weekly_summary"),
+            app_commands.Choice(name="6기불러오기", value="fetch_gen6_members"),
+            app_commands.Choice(name="6기포인트집계", value="gen6_points_summary"),
+            app_commands.Choice(name="지급", value="grant_points"),
+            app_commands.Choice(name="회수", value="deduct_points"),
+        ]
     )
     @app_commands.default_permissions(administrator=True)
     async def dao_admin_command(
@@ -186,6 +204,9 @@ def register_commands(bot: commands.Bot) -> None:
         action: str,
         generation: int | None = None,
         week: int | None = None,
+        target: discord.User | None = None,
+        amount: int | None = None,
+        reason: str | None = None,
     ) -> None:
         await interaction.response.defer()
 
@@ -240,6 +261,239 @@ def register_commands(bot: commands.Bot) -> None:
                     lines.append(f"... 외 {len(participants_sorted) - max_rows}명")
 
             await interaction.followup.send("\n".join(lines))
+
+        elif action == "fetch_gen6_members":
+            # Fetch members with 6기 역할
+            role_id = settings.generation_6_role_id
+            guild = interaction.guild
+
+            if guild is None:
+                await interaction.followup.send("❌ 길드 정보를 가져올 수 없습니다.")
+                return
+
+            # Ensure guild members are loaded
+            if not guild.chunked:
+                await guild.chunk()
+
+            role = guild.get_role(role_id)
+
+            if role is None:
+                await interaction.followup.send(
+                    f"❌ 역할 ID {role_id}를 찾을 수 없습니다."
+                )
+                return
+
+            members = role.members
+
+            if not members:
+                await interaction.followup.send(
+                    f"ℹ️ {role.name} 역할을 가진 멤버가 없습니다."
+                )
+                return
+
+            # Format member list
+            lines = [f"👥 **{role.name} 역할 멤버 목록** (총 {len(members)}명)", ""]
+
+            for idx, member in enumerate(members, start=1):
+                lines.append(
+                    f"{idx}. {member.display_name} (@{member.name}) - ID: {member.id}"
+                )
+
+            # Discord message length limit handling (2000 chars max)
+            message = "\n".join(lines)
+            if len(message) > 2000:
+                # Split into multiple messages
+                chunks = []
+                current_chunk = [lines[0], lines[1]]  # Header
+                current_length = len(lines[0]) + len(lines[1]) + 2
+
+                for line in lines[2:]:  # Skip header lines
+                    line_length = len(line) + 1  # +1 for newline
+                    if current_length + line_length > 1900:  # Leave some margin
+                        chunks.append("\n".join(current_chunk))
+                        current_chunk = [line]
+                        current_length = line_length
+                    else:
+                        current_chunk.append(line)
+                        current_length += line_length
+
+                if current_chunk:
+                    chunks.append("\n".join(current_chunk))
+
+                # Send first chunk
+                await interaction.followup.send(chunks[0])
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk)
+            else:
+                await interaction.followup.send(message)
+
+        elif action == "gen6_points_summary":
+            # Get all 6기 users' points
+            generation = 6
+            users = await db.get_generation_points(generation)
+
+            if not users:
+                await interaction.followup.send(f"ℹ️ {generation}기 유저가 없습니다.")
+                return
+
+            # Sort by nickname (Korean alphabetical order)
+            users_sorted = sorted(users, key=lambda u: u["nickname"].lower())
+
+            # Format as markdown table in code block
+            lines = [
+                f"💰 **{generation}기 포인트 집계** (총 {len(users_sorted)}명)",
+                "",
+                "```",
+                "| 순번 | 닉네임 | 유저명 | 포인트 |",
+                "|------|--------|--------|-------:|",
+            ]
+
+            for idx, user in enumerate(users_sorted, start=1):
+                nickname = user["nickname"]
+                username = user["username"]
+                points = user["total_points"]
+                lines.append(f"| {idx} | {nickname} | @{username} | {points:,} |")
+
+            lines.append("```")
+
+            # Discord message length limit handling (2000 chars max)
+            message = "\n".join(lines)
+            if len(message) > 2000:
+                # Split into multiple messages
+                chunks = []
+                header = "\n".join(
+                    lines[:5]
+                )  # Header + table header (including opening ```)
+                current_chunk = [header]
+                current_length = len(header)
+
+                for line in lines[5:-1]:  # Skip header and closing ```
+                    line_length = len(line) + 1  # +1 for newline
+                    if current_length + line_length + 4 > 1900:  # +4 for closing ```
+                        current_chunk.append("```")
+                        chunks.append("\n".join(current_chunk))
+                        current_chunk = [
+                            lines[0],
+                            "",
+                            lines[2],
+                            lines[3],
+                            lines[4],
+                        ]  # Restart with header
+                        current_length = len("\n".join(current_chunk))
+                    current_chunk.append(line)
+                    current_length += line_length
+
+                if len(current_chunk) > 5:  # Has content beyond header
+                    current_chunk.append("```")
+                    chunks.append("\n".join(current_chunk))
+
+                # Send first chunk
+                await interaction.followup.send(chunks[0])
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk)
+            else:
+                await interaction.followup.send(message)
+
+        elif action in ["grant_points", "deduct_points"]:
+            # Check if user has admin role
+            member = (
+                interaction.guild.get_member(interaction.user.id)
+                if interaction.guild
+                else None
+            )
+            if member is None:
+                await interaction.followup.send(
+                    "❌ 길드 멤버 정보를 가져올 수 없습니다."
+                )
+                return
+
+            has_admin_role = any(
+                role.id == settings.admin_role_id for role in member.roles
+            )
+            if not has_admin_role:
+                await interaction.followup.send("❌ 관리자 권한이 필요합니다.")
+                return
+
+            # Validate parameters
+            if target is None or amount is None or reason is None:
+                await interaction.followup.send(
+                    f"❌ 포인트 {('지급' if action == 'grant_points' else '회수')}에 필요한 값이 누락되었습니다.\n"
+                    f"필수 파라미터: target(대상 유저), amount(포인트 수량), reason(사유)"
+                )
+                return
+
+            if amount <= 0:
+                await interaction.followup.send("❌ 포인트 수량은 양수여야 합니다.")
+                return
+
+            # if target.bot:
+            #     await interaction.followup.send(
+            #         "❌ 봇에게는 포인트를 지급하거나 회수할 수 없습니다."
+            #     )
+            #     return
+
+            # Get target user info
+            target_id = str(target.id)
+            target_username = target.name
+            target_member = (
+                interaction.guild.get_member(target.id) if interaction.guild else None
+            )
+            target_nickname = (
+                target_member.display_name if target_member else target_username
+            )
+
+            # Ensure user exists in database
+            await db.get_or_create_user(
+                discord_id=target_id,
+                username=target_username,
+                nickname=target_nickname,
+            )
+
+            # Get current points
+            current_points = await db.get_user_points(target_id)
+
+            # Create transaction
+            is_grant = action == "grant_points"
+            points_delta = amount if is_grant else -amount
+
+            # Check if deduction would result in negative points
+            if not is_grant and current_points + points_delta < 0:
+                await interaction.followup.send(
+                    f"❌ 포인트 회수 실패\n"
+                    f"• 현재 포인트: {current_points:,} point\n"
+                    f"• 회수 시도: {amount:,} point\n"
+                    f"• 포인트는 0 미만이 될 수 없습니다."
+                )
+                return
+
+            base_reason = "관리자지급" if is_grant else "관리자회수"
+            transaction_reason: str = f'{base_reason} "{reason}"'
+
+            transaction = Transaction(
+                user_id=target_id,
+                points=points_delta,
+                reason=base_reason,
+                admin_id=str(interaction.user.id),
+                admin_note=transaction_reason,
+            )
+
+            await db.add_transaction(transaction)
+
+            # Get updated points
+            updated_points = await db.get_user_points(target_id)
+
+            # Format message
+            action_text = "지급" if is_grant else "회수"
+            emoji = "💰" if is_grant else "📤"
+            await interaction.followup.send(
+                f"{emoji} **포인트 {action_text} 완료**\n"
+                f"• 대상: {target_nickname} (@{target_username})\n"
+                f"• 수량: {amount:,} point {'지급' if is_grant else '회수'}\n"
+                f"• 사유: {reason}\n"
+                f"• 현재 포인트: {updated_points:,} point"
+            )
 
     # --------- 수동 동기화 (prefix: !sync) ---------
     @bot.command(name="sync")

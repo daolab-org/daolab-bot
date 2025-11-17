@@ -99,7 +99,7 @@ class Database:
         self,
         discord_id: str,
         username: str,
-        generation: int = 6,
+        generation: int | None = None,
         nickname: str | None = None,
     ) -> User:
         self.ensure_connected()
@@ -119,6 +119,10 @@ class Database:
                 )
                 user_data.update(updates)
             return User(**user_data)
+
+        # Use default_generation if generation is not provided
+        if generation is None:
+            generation = settings.default_generation
 
         new_user = User(
             discord_id=discord_id,
@@ -486,6 +490,39 @@ class Database:
                 for p in participants
             },
         }
+
+    async def get_generation_points(self, generation: int) -> list[dict[str, Any]]:
+        """Get all users' points for a specific generation.
+
+        Returns a list of user data sorted by total_points (descending):
+        - discord_id: user's discord ID
+        - username: user's username
+        - nickname: user's nickname
+        - total_points: user's total points
+        """
+        self.ensure_connected()
+        from app.filters import is_test_user_doc
+
+        cursor = self.users_collection.find({"generation": generation}).sort(
+            "total_points", DESCENDING
+        )
+
+        users = []
+        for user_doc in cursor:
+            if is_test_user_doc(user_doc):
+                continue
+            users.append(
+                {
+                    "discord_id": user_doc.get("discord_id"),
+                    "username": user_doc.get("username"),
+                    "nickname": user_doc.get("nickname")
+                    or user_doc.get("username")
+                    or user_doc.get("discord_id"),
+                    "total_points": user_doc.get("total_points", 0),
+                }
+            )
+
+        return users
 
 
 db = Database()
