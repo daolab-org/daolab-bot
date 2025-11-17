@@ -191,6 +191,7 @@ def register_commands(bot: commands.Bot) -> None:
         action=[
             app_commands.Choice(name="출석현황", value="weekly_summary"),
             app_commands.Choice(name="6기불러오기", value="fetch_gen6_members"),
+            app_commands.Choice(name="6기포인트집계", value="gen6_points_summary"),
             app_commands.Choice(name="지급", value="grant_points"),
             app_commands.Choice(name="회수", value="deduct_points"),
         ]
@@ -315,6 +316,74 @@ def register_commands(bot: commands.Bot) -> None:
                         current_length += line_length
 
                 if current_chunk:
+                    chunks.append("\n".join(current_chunk))
+
+                # Send first chunk
+                await interaction.followup.send(chunks[0])
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk)
+            else:
+                await interaction.followup.send(message)
+
+        elif action == "gen6_points_summary":
+            # Get all 6기 users' points
+            generation = 6
+            users = await db.get_generation_points(generation)
+
+            if not users:
+                await interaction.followup.send(f"ℹ️ {generation}기 유저가 없습니다.")
+                return
+
+            # Sort by nickname (Korean alphabetical order)
+            users_sorted = sorted(users, key=lambda u: u["nickname"].lower())
+
+            # Format as markdown table in code block
+            lines = [
+                f"💰 **{generation}기 포인트 집계** (총 {len(users_sorted)}명)",
+                "",
+                "```",
+                "| 순번 | 닉네임 | 유저명 | 포인트 |",
+                "|------|--------|--------|-------:|",
+            ]
+
+            for idx, user in enumerate(users_sorted, start=1):
+                nickname = user["nickname"]
+                username = user["username"]
+                points = user["total_points"]
+                lines.append(f"| {idx} | {nickname} | @{username} | {points:,} |")
+
+            lines.append("```")
+
+            # Discord message length limit handling (2000 chars max)
+            message = "\n".join(lines)
+            if len(message) > 2000:
+                # Split into multiple messages
+                chunks = []
+                header = "\n".join(
+                    lines[:5]
+                )  # Header + table header (including opening ```)
+                current_chunk = [header]
+                current_length = len(header)
+
+                for line in lines[5:-1]:  # Skip header and closing ```
+                    line_length = len(line) + 1  # +1 for newline
+                    if current_length + line_length + 4 > 1900:  # +4 for closing ```
+                        current_chunk.append("```")
+                        chunks.append("\n".join(current_chunk))
+                        current_chunk = [
+                            lines[0],
+                            "",
+                            lines[2],
+                            lines[3],
+                            lines[4],
+                        ]  # Restart with header
+                        current_length = len("\n".join(current_chunk))
+                    current_chunk.append(line)
+                    current_length += line_length
+
+                if len(current_chunk) > 5:  # Has content beyond header
+                    current_chunk.append("```")
                     chunks.append("\n".join(current_chunk))
 
                 # Send first chunk

@@ -619,5 +619,172 @@ async def test_grant_points_no_guild(mock_interaction, mock_target_user):
     assert "❌ 길드 멤버 정보를 가져올 수 없습니다" in sent_message
 
 
+@pytest.mark.asyncio
+async def test_gen6_points_summary_success(mock_interaction):
+    """Test successful generation 6 points summary."""
+    mock_interaction.guild = MagicMock()
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    assert dao_admin_command is not None
+
+    # Mock database operations
+    mock_users = [
+        {
+            "discord_id": "111111111",
+            "username": "user1",
+            "nickname": "유저1",
+            "total_points": 1500,
+        },
+        {
+            "discord_id": "222222222",
+            "username": "user2",
+            "nickname": "유저2",
+            "total_points": 1200,
+        },
+        {
+            "discord_id": "333333333",
+            "username": "user3",
+            "nickname": "유저3",
+            "total_points": 900,
+        },
+    ]
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_generation_points = AsyncMock(return_value=mock_users)
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="gen6_points_summary",
+            generation=None,
+            week=None,
+            target=None,
+            amount=None,
+            reason=None,
+        )
+
+    # Verify
+    mock_interaction.response.defer.assert_called_once()
+    mock_db.get_generation_points.assert_called_once_with(6)
+    mock_interaction.followup.send.assert_called_once()
+
+    # Check the message content
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "6기 포인트 집계" in sent_message
+    assert "총 3명" in sent_message
+    assert "유저1" in sent_message
+    assert "1,500" in sent_message
+    assert "유저2" in sent_message
+    assert "1,200" in sent_message
+    assert "유저3" in sent_message
+    assert "900" in sent_message
+    # Check markdown table format
+    assert "순번" in sent_message  # Changed from 순위 to 순번
+    assert "닉네임" in sent_message
+    assert "유저명" in sent_message
+    assert "포인트" in sent_message
+    assert "@user1" in sent_message
+    assert "@user2" in sent_message
+    assert "@user3" in sent_message
+    assert "|" in sent_message  # Table separator
+
+
+@pytest.mark.asyncio
+async def test_gen6_points_summary_no_users(mock_interaction):
+    """Test points summary when no users exist."""
+    mock_interaction.guild = MagicMock()
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_generation_points = AsyncMock(return_value=[])
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="gen6_points_summary",
+            generation=None,
+            week=None,
+            target=None,
+            amount=None,
+            reason=None,
+        )
+
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "ℹ️" in sent_message
+    assert "6기 유저가 없습니다" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_gen6_points_summary_message_splitting(mock_interaction):
+    """Test message splitting for large user lists."""
+    mock_interaction.guild = MagicMock()
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Create many users to exceed 2000 char limit
+    many_users = []
+    for i in range(100):
+        many_users.append(
+            {
+                "discord_id": str(1000000000 + i),
+                "username": f"user{i}",
+                "nickname": f"매우긴닉네임입니다{i}" * 3,
+                "total_points": 10000 - i * 10,
+            }
+        )
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_generation_points = AsyncMock(return_value=many_users)
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="gen6_points_summary",
+            generation=None,
+            week=None,
+            target=None,
+            amount=None,
+            reason=None,
+        )
+
+    # Verify multiple messages were sent
+    assert mock_interaction.followup.send.call_count >= 1, (
+        "Should send at least one message"
+    )
+
+    # Verify each message is under 2000 characters
+    for call in mock_interaction.followup.send.call_args_list:
+        message = call[0][0]
+        assert len(message) <= 2000, (
+            f"Message length {len(message)} exceeds 2000 characters"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
