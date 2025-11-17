@@ -135,9 +135,7 @@ class GratitudeService:
         received_list = []
 
         for record in sent_cursor:
-            to_user = await self.db.get_or_create_user(
-                record["to_user_id"], "Unknown", 6
-            )
+            to_user = await self.db.get_or_create_user(record["to_user_id"], "Unknown")
             sent_list.append(
                 {
                     "to_user_id": record["to_user_id"],
@@ -151,7 +149,7 @@ class GratitudeService:
 
         for record in received_cursor:
             from_user = await self.db.get_or_create_user(
-                record["from_user_id"], "Unknown", 6
+                record["from_user_id"], "Unknown"
             )
             received_list.append(
                 {
@@ -225,7 +223,7 @@ class GratitudeService:
 
         top_recipients = []
         for item in sent_to_users:
-            user = await self.db.get_or_create_user(item["_id"], "Unknown", 6)
+            user = await self.db.get_or_create_user(item["_id"], "Unknown")
             top_recipients.append(
                 {
                     "user_id": item["_id"],

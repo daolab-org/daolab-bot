@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         1423336658744639549,  # 출석체크 역할
     )
     attendance_generation: int = 6
+    default_generation: int = 999  # 기본 기수 (미확인 사용자)
 
     # Admin role ID
     admin_role_id: int = 1405883481812373564  # 관리자 역할

@@ -99,7 +99,7 @@ class Database:
         self,
         discord_id: str,
         username: str,
-        generation: int = 6,
+        generation: int | None = None,
         nickname: str | None = None,
     ) -> User:
         self.ensure_connected()
@@ -119,6 +119,10 @@ class Database:
                 )
                 user_data.update(updates)
             return User(**user_data)
+
+        # Use default_generation if generation is not provided
+        if generation is None:
+            generation = settings.default_generation
 
         new_user = User(
             discord_id=discord_id,
