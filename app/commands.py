@@ -178,7 +178,10 @@ def register_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="dao_admin", description="DAO 관리자 명령어")
     @app_commands.describe(action="수행할 작업", generation="기수", week="주차")
     @app_commands.choices(
-        action=[app_commands.Choice(name="출석현황", value="weekly_summary")]
+        action=[
+            app_commands.Choice(name="출석현황", value="weekly_summary"),
+            app_commands.Choice(name="6기불러오기", value="fetch_gen6_members"),
+        ]
     )
     @app_commands.default_permissions(administrator=True)
     async def dao_admin_command(
@@ -240,6 +243,72 @@ def register_commands(bot: commands.Bot) -> None:
                     lines.append(f"... 외 {len(participants_sorted) - max_rows}명")
 
             await interaction.followup.send("\n".join(lines))
+
+        elif action == "fetch_gen6_members":
+            # Fetch members with 6기 역할
+            role_id = settings.generation_6_role_id
+            guild = interaction.guild
+
+            if guild is None:
+                await interaction.followup.send("❌ 길드 정보를 가져올 수 없습니다.")
+                return
+
+            # Ensure guild members are loaded
+            if not guild.chunked:
+                await guild.chunk()
+
+            role = guild.get_role(role_id)
+
+            if role is None:
+                await interaction.followup.send(
+                    f"❌ 역할 ID {role_id}를 찾을 수 없습니다."
+                )
+                return
+
+            members = role.members
+
+            if not members:
+                await interaction.followup.send(
+                    f"ℹ️ {role.name} 역할을 가진 멤버가 없습니다."
+                )
+                return
+
+            # Format member list
+            lines = [f"👥 **{role.name} 역할 멤버 목록** (총 {len(members)}명)", ""]
+
+            for idx, member in enumerate(members, start=1):
+                lines.append(
+                    f"{idx}. {member.display_name} (@{member.name}) - ID: {member.id}"
+                )
+
+            # Discord message length limit handling (2000 chars max)
+            message = "\n".join(lines)
+            if len(message) > 2000:
+                # Split into multiple messages
+                chunks = []
+                current_chunk = [lines[0], lines[1]]  # Header
+                current_length = len(lines[0]) + len(lines[1]) + 2
+
+                for line in lines[2:]:  # Skip header lines
+                    line_length = len(line) + 1  # +1 for newline
+                    if current_length + line_length > 1900:  # Leave some margin
+                        chunks.append("\n".join(current_chunk))
+                        current_chunk = [line]
+                        current_length = line_length
+                    else:
+                        current_chunk.append(line)
+                        current_length += line_length
+
+                if current_chunk:
+                    chunks.append("\n".join(current_chunk))
+
+                # Send first chunk
+                await interaction.followup.send(chunks[0])
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk)
+            else:
+                await interaction.followup.send(message)
 
     # --------- 수동 동기화 (prefix: !sync) ---------
     @bot.command(name="sync")

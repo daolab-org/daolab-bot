@@ -20,5 +20,8 @@ class Settings(BaseSettings):
     )
     attendance_generation: int = 6
 
+    # Generation role IDs
+    generation_6_role_id: int = 1413477024982503454  # 6기 역할
+
 
 settings = Settings(_env_file=".env", _env_file_encoding="utf-8")
