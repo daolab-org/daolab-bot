@@ -1,8 +1,8 @@
 """Tests for admin commands, specifically the fetch_gen6_members functionality."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
-from discord import Interaction, Role, Member, Guild
+from unittest.mock import AsyncMock, MagicMock, patch
+from discord import Interaction, Role, Member, Guild, User
 from app.commands import register_commands
 from app.settings import settings
 
@@ -254,6 +254,369 @@ async def test_fetch_gen6_members_message_splitting(
         assert len(message) <= 2000, (
             f"Message length {len(message)} exceeds 2000 characters"
         )
+
+
+@pytest.fixture
+def mock_admin_member():
+    """Create a mock admin member with admin role."""
+    member = MagicMock(spec=Member)
+    member.id = 123456789
+    member.name = "admin_user"
+    member.display_name = "관리자"
+
+    admin_role = MagicMock()
+    admin_role.id = settings.admin_role_id
+    member.roles = [admin_role]
+
+    return member
+
+
+@pytest.fixture
+def mock_target_user():
+    """Create a mock target user for point operations."""
+    user = MagicMock(spec=User)
+    user.id = 987654321
+    user.name = "target_user"
+    user.bot = False
+    return user
+
+
+@pytest.fixture
+def mock_target_member():
+    """Create a mock target member."""
+    member = MagicMock(spec=Member)
+    member.id = 987654321
+    member.display_name = "대상유저"
+    return member
+
+
+# ========== Point Grant/Deduct Tests ==========
+
+
+@pytest.mark.asyncio
+async def test_grant_points_success(
+    mock_interaction,
+    mock_guild,
+    mock_admin_member,
+    mock_target_user,
+    mock_target_member,
+):
+    """Test successful point grant."""
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = mock_admin_member.id
+    mock_guild.get_member = MagicMock(
+        side_effect=lambda uid: {
+            mock_admin_member.id: mock_admin_member,
+            mock_target_user.id: mock_target_member,
+        }.get(uid)
+    )
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    assert dao_admin_command is not None
+
+    # Mock database operations
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_or_create_user = AsyncMock()
+        mock_db.get_user_points = AsyncMock(side_effect=[100, 200])  # before and after
+        mock_db.add_transaction = AsyncMock()
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="grant_points",
+            generation=None,
+            week=None,
+            target=mock_target_user,
+            amount=100,
+            reason="이벤트 참여 보상",
+        )
+
+    # Verify
+    mock_interaction.response.defer.assert_called_once()
+    mock_db.get_or_create_user.assert_called_once()
+    mock_db.add_transaction.assert_called_once()
+
+    # Check transaction details
+    transaction_call = mock_db.add_transaction.call_args[0][0]
+    assert transaction_call.user_id == str(mock_target_user.id)
+    assert transaction_call.points == 100
+    assert transaction_call.reason == "관리자지급"
+    assert transaction_call.admin_id == str(mock_admin_member.id)
+    assert "이벤트 참여 보상" in transaction_call.admin_note
+
+    # Check success message
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "💰" in sent_message
+    assert "포인트 지급 완료" in sent_message
+    assert "200" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_deduct_points_success(
+    mock_interaction,
+    mock_guild,
+    mock_admin_member,
+    mock_target_user,
+    mock_target_member,
+):
+    """Test successful point deduction."""
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = mock_admin_member.id
+    mock_guild.get_member = MagicMock(
+        side_effect=lambda uid: {
+            mock_admin_member.id: mock_admin_member,
+            mock_target_user.id: mock_target_member,
+        }.get(uid)
+    )
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Mock database operations
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_or_create_user = AsyncMock()
+        mock_db.get_user_points = AsyncMock(side_effect=[100, 50])  # before and after
+        mock_db.add_transaction = AsyncMock()
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="deduct_points",
+            generation=None,
+            week=None,
+            target=mock_target_user,
+            amount=50,
+            reason="규정 위반",
+        )
+
+    # Verify transaction
+    transaction_call = mock_db.add_transaction.call_args[0][0]
+    assert transaction_call.points == -50
+    assert transaction_call.reason == "관리자회수"
+    assert "규정 위반" in transaction_call.admin_note
+
+    # Check success message
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "📤" in sent_message
+    assert "포인트 회수 완료" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_deduct_points_insufficient_balance(
+    mock_interaction,
+    mock_guild,
+    mock_admin_member,
+    mock_target_user,
+    mock_target_member,
+):
+    """Test point deduction with insufficient balance."""
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = mock_admin_member.id
+    mock_guild.get_member = MagicMock(
+        side_effect=lambda uid: {
+            mock_admin_member.id: mock_admin_member,
+            mock_target_user.id: mock_target_member,
+        }.get(uid)
+    )
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Mock database - user has only 30 points
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_or_create_user = AsyncMock()
+        mock_db.get_user_points = AsyncMock(return_value=30)
+        mock_db.add_transaction = AsyncMock()
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="deduct_points",
+            generation=None,
+            week=None,
+            target=mock_target_user,
+            amount=50,
+            reason="테스트",
+        )
+
+    # Verify transaction was NOT created
+    mock_db.add_transaction.assert_not_called()
+
+    # Check error message
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌ 포인트 회수 실패" in sent_message
+    assert "30" in sent_message
+    assert "0 미만이 될 수 없습니다" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_grant_points_no_admin_role(
+    mock_interaction, mock_guild, mock_target_user
+):
+    """Test point grant without admin role."""
+    # Create member without admin role
+    non_admin_member = MagicMock(spec=Member)
+    non_admin_member.id = 111111111
+    non_admin_member.roles = []  # No admin role
+
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = non_admin_member.id
+    mock_guild.get_member = MagicMock(return_value=non_admin_member)
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="grant_points",
+        generation=None,
+        week=None,
+        target=mock_target_user,
+        amount=100,
+        reason="테스트",
+    )
+
+    # Check error message
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌ 관리자 권한이 필요합니다" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_grant_points_missing_parameters(
+    mock_interaction, mock_guild, mock_admin_member
+):
+    """Test point grant with missing parameters."""
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = mock_admin_member.id
+    mock_guild.get_member = MagicMock(return_value=mock_admin_member)
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Test without target
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="grant_points",
+        generation=None,
+        week=None,
+        target=None,
+        amount=100,
+        reason="테스트",
+    )
+
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌" in sent_message
+    assert "누락" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_grant_points_invalid_amount(
+    mock_interaction, mock_guild, mock_admin_member, mock_target_user
+):
+    """Test point grant with invalid amount (zero or negative)."""
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = mock_admin_member.id
+    mock_guild.get_member = MagicMock(return_value=mock_admin_member)
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Test with zero amount
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="grant_points",
+        generation=None,
+        week=None,
+        target=mock_target_user,
+        amount=0,
+        reason="테스트",
+    )
+
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌ 포인트 수량은 양수여야 합니다" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_grant_points_no_guild(mock_interaction, mock_target_user):
+    """Test point grant when guild is None."""
+    mock_interaction.guild = None
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="grant_points",
+        generation=None,
+        week=None,
+        target=mock_target_user,
+        amount=100,
+        reason="테스트",
+    )
+
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌ 길드 멤버 정보를 가져올 수 없습니다" in sent_message
 
 
 if __name__ == "__main__":

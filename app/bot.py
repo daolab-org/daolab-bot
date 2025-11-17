@@ -142,13 +142,21 @@ class DaoBot(commands.Bot):
             if total is not None:
                 msg += f" (받은 사람 {total:,}p)"
         elif reason == "관리자지급":
+            admin_mention = f"<@{tx.admin_id}>" if tx.admin_id else "관리자"
             msg = f"⚙️ [관리자 지급] {sign}{pts}p → {mention_user}"
             if total is not None:
                 msg += f" (총 {total:,}p)"
+            if tx.admin_note:
+                msg += f"\n사유: {tx.admin_note}"
+            msg += f"\n담당자: {admin_mention}"
         elif reason == "관리자회수":
+            admin_mention = f"<@{tx.admin_id}>" if tx.admin_id else "관리자"
             msg = f"⚙️ [관리자 회수] {sign}{pts}p → {mention_user}"
             if total is not None:
                 msg += f" (총 {total:,}p)"
+            if tx.admin_note:
+                msg += f"\n사유: {tx.admin_note}"
+            msg += f"\n담당자: {admin_mention}"
         else:
             msg = f"📒 [{reason}] {sign}{pts}p → {mention_user}"
             if total is not None:
