@@ -34,6 +34,117 @@ def _chunk_lines(lines: list[str], limit: int = 1900) -> list[str]:
     return chunks
 
 
+async def _aggregate_points_by_role(
+    interaction: discord.Interaction,
+    generation: int,
+    role_id: int,
+    role_name: str,
+) -> None:
+    """Aggregate and display points for users with a specific role.
+
+    Args:
+        interaction: Discord interaction object
+        generation: Generation number (e.g., 6 for 6기)
+        role_id: Discord role ID to filter by
+        role_name: Display name of the role (e.g., "6기", "6기 셰르파")
+    """
+    guild = interaction.guild
+
+    if guild is None:
+        await interaction.followup.send("❌ 길드 정보를 가져올 수 없습니다.")
+        return
+
+    # Ensure guild members are loaded
+    if not guild.chunked:
+        await guild.chunk()
+
+    role = guild.get_role(role_id)
+
+    if role is None:
+        await interaction.followup.send(f"❌ 역할 ID {role_id}를 찾을 수 없습니다.")
+        return
+
+    # Get member IDs with this role
+    member_ids = {str(member.id) for member in role.members}
+
+    if not member_ids:
+        await interaction.followup.send(f"ℹ️ {role_name} 역할을 가진 멤버가 없습니다.")
+        return
+
+    # Get all generation users' points
+    users = await db.get_generation_points(generation)
+
+    if not users:
+        await interaction.followup.send(f"ℹ️ {generation}기 유저가 없습니다.")
+        return
+
+    # Filter users by role
+    filtered_users = [u for u in users if u["discord_id"] in member_ids]
+
+    if not filtered_users:
+        await interaction.followup.send(
+            f"ℹ️ {role_name} 역할을 가진 {generation}기 유저가 없습니다."
+        )
+        return
+
+    # Sort by nickname (Korean alphabetical order)
+    users_sorted = sorted(filtered_users, key=lambda u: u["nickname"].lower())
+
+    # Format as markdown table in code block
+    lines = [
+        f"💰 **{role_name} 포인트 집계** (총 {len(users_sorted)}명)",
+        "",
+        "```",
+        "| 순번 | 닉네임 | 유저명 | 포인트 |",
+        "|------|--------|--------|-------:|",
+    ]
+
+    for idx, user in enumerate(users_sorted, start=1):
+        nickname = user["nickname"]
+        username = user["username"]
+        points = user["total_points"]
+        lines.append(f"| {idx} | {nickname} | @{username} | {points:,} |")
+
+    lines.append("```")
+
+    # Discord message length limit handling (2000 chars max)
+    message = "\n".join(lines)
+    if len(message) > 2000:
+        # Split into multiple messages
+        chunks = []
+        header = "\n".join(lines[:5])  # Header + table header (including opening ```)
+        current_chunk = [header]
+        current_length = len(header)
+
+        for line in lines[5:-1]:  # Skip header and closing ```
+            line_length = len(line) + 1  # +1 for newline
+            if current_length + line_length + 4 > 1900:  # +4 for closing ```
+                current_chunk.append("```")
+                chunks.append("\n".join(current_chunk))
+                current_chunk = [
+                    lines[0],
+                    "",
+                    lines[2],
+                    lines[3],
+                    lines[4],
+                ]  # Restart with header
+                current_length = len("\n".join(current_chunk))
+            current_chunk.append(line)
+            current_length += line_length
+
+        if len(current_chunk) > 5:  # Has content beyond header
+            current_chunk.append("```")
+            chunks.append("\n".join(current_chunk))
+
+        # Send first chunk
+        await interaction.followup.send(chunks[0])
+        # Send remaining chunks
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk)
+    else:
+        await interaction.followup.send(message)
+
+
 def register_commands(bot: commands.Bot) -> None:
     """Register all slash and prefix commands on the given bot.
 
@@ -163,6 +274,7 @@ def register_commands(bot: commands.Bot) -> None:
             "• /dao_admin 출석현황 [기수] — 자동 주차별 출석 집계",
             "• /dao_admin 6기불러오기 — 6기 역할을 가진 멤버 목록 조회",
             "• /dao_admin 6기포인트집계 — 6기 전체 포인트 집계 (닉네임 순)",
+            "• /dao_admin 6기셰르파포인트집계 — 6기 셰르파 포인트 집계 (닉네임 순)",
             "• /dao_admin 지급 @유저 [수량] [사유] — 특정 유저에게 포인트 지급",
             "• /dao_admin 회수 @유저 [수량] [사유] — 특정 유저로부터 포인트 회수",
         ]
@@ -215,6 +327,9 @@ def register_commands(bot: commands.Bot) -> None:
             app_commands.Choice(name="출석현황", value="weekly_summary"),
             app_commands.Choice(name="6기불러오기", value="fetch_gen6_members"),
             app_commands.Choice(name="6기포인트집계", value="gen6_points_summary"),
+            app_commands.Choice(
+                name="6기셰르파포인트집계", value="gen6_sherpa_points_summary"
+            ),
             app_commands.Choice(name="지급", value="grant_points"),
             app_commands.Choice(name="회수", value="deduct_points"),
         ]
@@ -342,7 +457,9 @@ def register_commands(bot: commands.Bot) -> None:
                             line,
                         ]
                         current_length = (
-                            sum(len(l) for l in current_chunk) + len(current_chunk) - 1
+                            sum(len(chunk_line) for chunk_line in current_chunk)
+                            + len(current_chunk)
+                            - 1
                         )
                     else:
                         current_chunk.append(line)
@@ -439,72 +556,22 @@ def register_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send(message)
 
         elif action == "gen6_points_summary":
-            # Get all 6기 users' points
-            generation = 6
-            users = await db.get_generation_points(generation)
+            # Use refactored helper for all 6기 members
+            await _aggregate_points_by_role(
+                interaction=interaction,
+                generation=6,
+                role_id=settings.generation_6_role_id,
+                role_name="6기",
+            )
 
-            if not users:
-                await interaction.followup.send(f"ℹ️ {generation}기 유저가 없습니다.")
-                return
-
-            # Sort by nickname (Korean alphabetical order)
-            users_sorted = sorted(users, key=lambda u: u["nickname"].lower())
-
-            # Format as markdown table in code block
-            lines = [
-                f"💰 **{generation}기 포인트 집계** (총 {len(users_sorted)}명)",
-                "",
-                "```",
-                "| 순번 | 닉네임 | 유저명 | 포인트 |",
-                "|------|--------|--------|-------:|",
-            ]
-
-            for idx, user in enumerate(users_sorted, start=1):
-                nickname = user["nickname"]
-                username = user["username"]
-                points = user["total_points"]
-                lines.append(f"| {idx} | {nickname} | @{username} | {points:,} |")
-
-            lines.append("```")
-
-            # Discord message length limit handling (2000 chars max)
-            message = "\n".join(lines)
-            if len(message) > 2000:
-                # Split into multiple messages
-                chunks = []
-                header = "\n".join(
-                    lines[:5]
-                )  # Header + table header (including opening ```)
-                current_chunk = [header]
-                current_length = len(header)
-
-                for line in lines[5:-1]:  # Skip header and closing ```
-                    line_length = len(line) + 1  # +1 for newline
-                    if current_length + line_length + 4 > 1900:  # +4 for closing ```
-                        current_chunk.append("```")
-                        chunks.append("\n".join(current_chunk))
-                        current_chunk = [
-                            lines[0],
-                            "",
-                            lines[2],
-                            lines[3],
-                            lines[4],
-                        ]  # Restart with header
-                        current_length = len("\n".join(current_chunk))
-                    current_chunk.append(line)
-                    current_length += line_length
-
-                if len(current_chunk) > 5:  # Has content beyond header
-                    current_chunk.append("```")
-                    chunks.append("\n".join(current_chunk))
-
-                # Send first chunk
-                await interaction.followup.send(chunks[0])
-                # Send remaining chunks
-                for chunk in chunks[1:]:
-                    await interaction.followup.send(chunk)
-            else:
-                await interaction.followup.send(message)
+        elif action == "gen6_sherpa_points_summary":
+            # Use refactored helper for 6기 셰르파 members
+            await _aggregate_points_by_role(
+                interaction=interaction,
+                generation=6,
+                role_id=settings.generation_6_sherpa_role_id,
+                role_name="6기 셰르파",
+            )
 
         elif action in ["grant_points", "deduct_points"]:
             # Check if user has admin role

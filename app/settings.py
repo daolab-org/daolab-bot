@@ -6,6 +6,7 @@ bot_development_channel_id: int = 1409906888203571210
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
+    # MongoDB connection settings
     mongo_host: str
     mongo_user: str
     mongo_port: int = 27017
@@ -29,11 +30,14 @@ class Settings(BaseSettings):
     attendance_generation: int = 6
     default_generation: int = 999  # 기본 기수 (미확인 사용자)
 
-    # Admin role ID
+    # 관리자 role ID
     admin_role_id: int = 1405883481812373564  # 관리자 역할
 
-    # Generation role IDs
+    # 기수별 role ID
     generation_6_role_id: int = 1413477024982503454  # 6기 역할
+
+    # 기수별 Sherpa role ID
+    generation_6_sherpa_role_id: int = 1405882704825679984  # 6기 셰르파 역할
 
 
 settings = Settings(_env_file=".env", _env_file_encoding="utf-8")

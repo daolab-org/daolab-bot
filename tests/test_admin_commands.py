@@ -809,9 +809,25 @@ async def test_grant_points_no_guild(mock_interaction, mock_target_user):
 
 
 @pytest.mark.asyncio
-async def test_gen6_points_summary_success(mock_interaction):
+async def test_gen6_points_summary_success(mock_interaction, mock_guild):
     """Test successful generation 6 points summary."""
-    mock_interaction.guild = MagicMock()
+    # Setup mock guild and role
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+
+    mock_role = MagicMock(spec=Role)
+    mock_role.name = "6기"
+    mock_role.id = settings.generation_6_role_id
+
+    # Create mock members for the role
+    mock_members = []
+    for i in range(1, 4):
+        member = MagicMock(spec=Member)
+        member.id = int(f"11111111{i}")
+        mock_members.append(member)
+
+    mock_role.members = mock_members
+    mock_guild.get_role.return_value = mock_role
 
     from app.bot import DaoBot
 
@@ -835,13 +851,13 @@ async def test_gen6_points_summary_success(mock_interaction):
             "total_points": 1500,
         },
         {
-            "discord_id": "222222222",
+            "discord_id": "111111112",
             "username": "user2",
             "nickname": "유저2",
             "total_points": 1200,
         },
         {
-            "discord_id": "333333333",
+            "discord_id": "111111113",
             "username": "user3",
             "nickname": "유저3",
             "total_points": 900,
@@ -887,9 +903,17 @@ async def test_gen6_points_summary_success(mock_interaction):
 
 
 @pytest.mark.asyncio
-async def test_gen6_points_summary_no_users(mock_interaction):
+async def test_gen6_points_summary_no_users(mock_interaction, mock_guild):
     """Test points summary when no users exist."""
-    mock_interaction.guild = MagicMock()
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+
+    # Setup role with no members
+    mock_role = MagicMock(spec=Role)
+    mock_role.name = "6기"
+    mock_role.id = settings.generation_6_role_id
+    mock_role.members = []
+    mock_guild.get_role.return_value = mock_role
 
     from app.bot import DaoBot
 
@@ -916,13 +940,26 @@ async def test_gen6_points_summary_no_users(mock_interaction):
 
     sent_message = mock_interaction.followup.send.call_args[0][0]
     assert "ℹ️" in sent_message
-    assert "6기 유저가 없습니다" in sent_message
+    assert "역할을 가진 멤버가 없습니다" in sent_message
 
 
 @pytest.mark.asyncio
-async def test_gen6_points_summary_message_splitting(mock_interaction):
+async def test_gen6_points_summary_message_splitting(mock_interaction, mock_guild):
     """Test message splitting for large user lists."""
-    mock_interaction.guild = MagicMock()
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+
+    # Create many members for the role
+    mock_role = MagicMock(spec=Role)
+    mock_role.name = "6기"
+    mock_role.id = settings.generation_6_role_id
+    mock_members = []
+    for i in range(100):
+        member = MagicMock(spec=Member)
+        member.id = 1000000000 + i
+        mock_members.append(member)
+    mock_role.members = mock_members
+    mock_guild.get_role.return_value = mock_role
 
     from app.bot import DaoBot
 
@@ -970,6 +1007,187 @@ async def test_gen6_points_summary_message_splitting(mock_interaction):
         assert len(message) <= 2000, (
             f"Message length {len(message)} exceeds 2000 characters"
         )
+
+
+@pytest.mark.asyncio
+async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
+    """Test successful generation 6 Sherpa points summary."""
+    # Setup mock guild and Sherpa role
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+
+    mock_role = MagicMock(spec=Role)
+    mock_role.name = "6기 셰르파"
+    mock_role.id = settings.generation_6_sherpa_role_id
+
+    # Create mock Sherpa members for the role
+    mock_members = []
+    for i in range(1, 4):
+        member = MagicMock(spec=Member)
+        member.id = int(f"55555555{i}")
+        mock_members.append(member)
+
+    mock_role.members = mock_members
+    mock_guild.get_role.return_value = mock_role
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    assert dao_admin_command is not None
+
+    # Mock database operations - return all 6기 users, but only Sherpas will be filtered
+    mock_all_users = [
+        {
+            "discord_id": "555555551",
+            "username": "sherpa1",
+            "nickname": "셰르파1",
+            "total_points": 2000,
+        },
+        {
+            "discord_id": "555555552",
+            "username": "sherpa2",
+            "nickname": "셰르파2",
+            "total_points": 1800,
+        },
+        {
+            "discord_id": "555555553",
+            "username": "sherpa3",
+            "nickname": "셰르파3",
+            "total_points": 1600,
+        },
+        {
+            "discord_id": "999999999",
+            "username": "regular_user",
+            "nickname": "일반유저",
+            "total_points": 1400,
+        },
+    ]
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_generation_points = AsyncMock(return_value=mock_all_users)
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="gen6_sherpa_points_summary",
+            generation=None,
+            target=None,
+            amount=None,
+            reason=None,
+        )
+
+    # Verify
+    mock_interaction.response.defer.assert_called_once()
+    mock_db.get_generation_points.assert_called_once_with(6)
+    mock_interaction.followup.send.assert_called_once()
+
+    # Check the message content
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "6기 셰르파 포인트 집계" in sent_message
+    assert "총 3명" in sent_message
+    # Should include Sherpas
+    assert "셰르파1" in sent_message
+    assert "2,000" in sent_message
+    assert "셰르파2" in sent_message
+    assert "1,800" in sent_message
+    assert "셰르파3" in sent_message
+    assert "1,600" in sent_message
+    # Should NOT include regular user
+    assert "일반유저" not in sent_message
+    assert "1,400" not in sent_message
+    # Check markdown table format
+    assert "순번" in sent_message
+    assert "닉네임" in sent_message
+    assert "유저명" in sent_message
+    assert "포인트" in sent_message
+    assert "@sherpa1" in sent_message
+    assert "@sherpa2" in sent_message
+    assert "@sherpa3" in sent_message
+    assert "|" in sent_message  # Table separator
+
+
+@pytest.mark.asyncio
+async def test_gen6_sherpa_points_summary_no_sherpas(mock_interaction, mock_guild):
+    """Test Sherpa points summary when no Sherpas exist."""
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+
+    # Setup Sherpa role with no members
+    mock_role = MagicMock(spec=Role)
+    mock_role.name = "6기 셰르파"
+    mock_role.id = settings.generation_6_sherpa_role_id
+    mock_role.members = []
+    mock_guild.get_role.return_value = mock_role
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_generation_points = AsyncMock(return_value=[])
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="gen6_sherpa_points_summary",
+            generation=None,
+            target=None,
+            amount=None,
+            reason=None,
+        )
+
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "ℹ️" in sent_message
+    assert "역할을 가진 멤버가 없습니다" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_gen6_sherpa_points_summary_role_not_found(mock_interaction, mock_guild):
+    """Test when Sherpa role is not found."""
+    mock_interaction.guild = mock_guild
+    mock_guild.chunked = True
+    mock_guild.get_role.return_value = None
+
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="gen6_sherpa_points_summary",
+        generation=None,
+        target=None,
+        amount=None,
+        reason=None,
+    )
+
+    mock_interaction.response.defer.assert_called_once()
+    mock_guild.get_role.assert_called_once_with(settings.generation_6_sherpa_role_id)
+
+    # Check error message
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "❌ 역할 ID" in sent_message
+    assert "찾을 수 없습니다" in sent_message
 
 
 if __name__ == "__main__":
