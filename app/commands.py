@@ -126,7 +126,7 @@ async def _aggregate_points_by_role_only(
         return
 
     # Get all users' points and filter by role members
-    all_users = await db.users_collection.find({}).to_list(length=None)
+    all_users = db.users_collection.find({}).to_list(length=None)
 
     from app.filters import is_test_user_doc
 

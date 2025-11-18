@@ -1074,7 +1074,7 @@ async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
     with patch("app.commands.db") as mock_db:
         # Mock the users_collection.find().to_list()
         mock_cursor = MagicMock()
-        mock_cursor.to_list = AsyncMock(return_value=mock_user_docs)
+        mock_cursor.to_list = MagicMock(return_value=mock_user_docs)
         mock_db.users_collection.find.return_value = mock_cursor
 
         await dao_admin_command.callback(
