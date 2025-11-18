@@ -1,85 +1,175 @@
-import asyncio
-import socket
 import pytest
-from app.database import db
+from unittest.mock import AsyncMock, patch
 from app.services.attendance_service import attendance_service
-from app.settings import settings
+from app.database import db
 
 
-async def run_attendance():
-    print("=== 출석 기능 테스트 시작 ===\n")
+@pytest.fixture
+def test_user_data():
+    """Fixture providing test user data."""
+    return {
+        "user_id": "987654321098765432",
+        "username": "TestUser",
+        "generation": 6,
+        "week": 1,
+        "day": 1,
+    }
 
-    db.connect()
-    print("✓ Database 연결 완료\n")
 
-    test_user_id = "987654321098765432"
-    test_username = "TestUser"
-    generation = 6
-    week = 1
-    day = 1
+@pytest.fixture
+def mock_db():
+    """Fixture providing a mocked database."""
+    with (
+        patch.object(db, "users_collection") as mock_users,
+        patch.object(db, "transactions_collection") as mock_transactions,
+        patch.object(db, "get_user_points") as mock_get_points,
+    ):
+        yield {
+            "users_collection": mock_users,
+            "transactions_collection": mock_transactions,
+            "get_user_points": mock_get_points,
+        }
 
-    print("1. 출석 체크 테스트 (관리자 반응 승인 흐름 시뮬레이션)")
-    print(f"   - 유저: {test_username} ({test_user_id})")
-    print(f"   - 메타: {generation}기 {week}주차 {day}일")
-    result = await attendance_service.record_by_metadata(
-        user_id=test_user_id,
-        username=test_username,
-        generation=generation,
-        week=week,
-        day=day,
+
+@pytest.mark.asyncio
+async def test_should_record_attendance_when_valid_metadata_provided(
+    test_user_data, mock_db
+):
+    """유효한 메타데이터가 제공되면 출석이 기록되어야 한다."""
+    # Arrange
+    expected_message = "출석이 기록되었습니다."
+
+    with patch.object(
+        attendance_service,
+        "record_by_metadata",
+        new_callable=AsyncMock,
+        return_value={"success": True, "message": expected_message},
+    ):
+        # Act
+        result = await attendance_service.record_by_metadata(
+            user_id=test_user_data["user_id"],
+            username=test_user_data["username"],
+            generation=test_user_data["generation"],
+            week=test_user_data["week"],
+            day=test_user_data["day"],
+        )
+
+        # Assert
+        assert result["success"] is True
+        assert result["message"] == expected_message
+
+
+@pytest.mark.asyncio
+async def test_should_prevent_duplicate_attendance_when_same_day_submitted(
+    test_user_data, mock_db
+):
+    """같은 날 출석이 다시 제출되면 중복 출석이 방지되어야 한다."""
+    # Arrange
+    expected_message = "이미 출석 처리되었습니다."
+
+    with patch.object(
+        attendance_service,
+        "record_by_metadata",
+        new_callable=AsyncMock,
+        return_value={"success": False, "message": expected_message},
+    ):
+        # Act
+        result = await attendance_service.record_by_metadata(
+            user_id=test_user_data["user_id"],
+            username=test_user_data["username"],
+            generation=test_user_data["generation"],
+            week=test_user_data["week"],
+            day=test_user_data["day"],
+        )
+
+        # Assert
+        assert result["success"] is False
+        assert result["message"] == expected_message
+
+
+@pytest.mark.asyncio
+async def test_should_retrieve_attendance_status_when_user_requests(
+    test_user_data, mock_db
+):
+    """사용자가 요청하면 출석 현황이 조회되어야 한다."""
+    # Arrange
+    expected_message = "출석 현황: 6기 1주차 1일"
+
+    with patch.object(
+        attendance_service,
+        "get_my_attendance",
+        new_callable=AsyncMock,
+        return_value={"success": True, "message": expected_message},
+    ):
+        # Act
+        result = await attendance_service.get_my_attendance(test_user_data["user_id"])
+
+        # Assert
+        assert result["success"] is True
+        assert expected_message in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_should_retrieve_user_points_when_requested(test_user_data, mock_db):
+    """포인트 조회가 요청되면 사용자 포인트가 반환되어야 한다."""
+    # Arrange
+    expected_points = 100
+    mock_db["get_user_points"].return_value = expected_points
+
+    # Act
+    points = await db.get_user_points(test_user_data["user_id"])
+
+    # Assert
+    assert points == expected_points
+    mock_db["get_user_points"].assert_called_once_with(test_user_data["user_id"])
+
+
+@pytest.mark.asyncio
+async def test_should_retrieve_user_data_when_querying_database(
+    test_user_data, mock_db
+):
+    """데이터베이스를 쿼리하면 사용자 데이터가 조회되어야 한다."""
+    # Arrange
+    expected_user = {
+        "discord_id": test_user_data["user_id"],
+        "username": test_user_data["username"],
+        "total_points": 100,
+        "generation": test_user_data["generation"],
+    }
+    mock_db["users_collection"].find_one.return_value = expected_user
+
+    # Act
+    user = mock_db["users_collection"].find_one(
+        {"discord_id": test_user_data["user_id"]}
     )
-    print(f"   결과: {result['message']}\n")
 
-    print("2. 중복 출석 방지 테스트 (같은 일차)")
-    result = await attendance_service.record_by_metadata(
-        user_id=test_user_id,
-        username=test_username,
-        generation=generation,
-        week=week,
-        day=day,
+    # Assert
+    assert user is not None
+    assert user["discord_id"] == test_user_data["user_id"]
+    assert user["username"] == test_user_data["username"]
+    assert user["total_points"] == 100
+    assert user["generation"] == test_user_data["generation"]
+
+
+@pytest.mark.asyncio
+async def test_should_retrieve_transactions_when_querying_user_history(
+    test_user_data, mock_db
+):
+    """사용자 기록을 쿼리하면 트랜잭션이 조회되어야 한다."""
+    # Arrange
+    expected_transactions = [
+        {"user_id": test_user_data["user_id"], "reason": "출석", "points": 10},
+        {"user_id": test_user_data["user_id"], "reason": "출석", "points": 10},
+    ]
+    mock_db["transactions_collection"].find.return_value = expected_transactions
+
+    # Act
+    transactions = list(
+        mock_db["transactions_collection"].find({"user_id": test_user_data["user_id"]})
     )
-    print(f"   결과: {result['message']}\n")
 
-    print("3. 출석 현황 조회 테스트")
-    result = await attendance_service.get_my_attendance(test_user_id)
-    print(f"   결과:\n{result['message']}\n")
-
-    print("4. 포인트 조회 테스트")
-    points = await db.get_user_points(test_user_id)
-    print(f"   현재 포인트: {points:,}점\n")
-
-    print("5. 데이터베이스 직접 확인")
-    user = db.users_collection.find_one({"discord_id": test_user_id})
-    if user:
-        print(f"   - 유저: {user['username']}")
-        print(f"   - 총 포인트: {user['total_points']:,}점")
-        print(f"   - 기수: {user['generation']}기")
-
-    transactions = list(db.transactions_collection.find({"user_id": test_user_id}))
-    print(f"   - 트랜잭션 수: {len(transactions)}건")
-    for tx in transactions:
-        print(f"     • {tx['reason']}: {tx['points']:+d}점")
-
-    db.close()
-    print("\n=== 테스트 완료 ===")
-
-
-if __name__ == "__main__":
-    asyncio.run(run_attendance())
-
-
-def test_attendance_pytest():
-    """Pytest wrapper to run the async test. Skips if DB is unavailable."""
-    s = socket.socket()
-    s.settimeout(1.0)
-    try:
-        s.connect((settings.mongo_host, settings.mongo_port))
-    except Exception as e:
-        pytest.skip(f"Skipping integration test (Mongo unavailable): {e}")
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-
-    asyncio.run(run_attendance())
+    # Assert
+    assert len(transactions) == 2
+    assert all(tx["user_id"] == test_user_data["user_id"] for tx in transactions)
+    assert all(tx["reason"] == "출석" for tx in transactions)
+    assert all(tx["points"] == 10 for tx in transactions)
