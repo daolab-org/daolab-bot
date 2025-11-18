@@ -34,19 +34,19 @@ def _chunk_lines(lines: list[str], limit: int = 1900) -> list[str]:
     return chunks
 
 
-async def _aggregate_points_by_role(
+async def _aggregate_points_by_generation_and_role(
     interaction: discord.Interaction,
     generation: int,
     role_id: int,
     role_name: str,
 ) -> None:
-    """Aggregate and display points for users with a specific role.
+    """Aggregate and display points for users with both a generation and a specific role.
 
     Args:
         interaction: Discord interaction object
         generation: Generation number (e.g., 6 for 6기)
         role_id: Discord role ID to filter by
-        role_name: Display name of the role (e.g., "6기", "6기 셰르파")
+        role_name: Display name of the role (e.g., "6기")
     """
     guild = interaction.guild
 
@@ -87,8 +87,86 @@ async def _aggregate_points_by_role(
         )
         return
 
+    await _send_points_table(interaction, filtered_users, role_name)
+
+
+async def _aggregate_points_by_role_only(
+    interaction: discord.Interaction,
+    role_id: int,
+    role_name: str,
+) -> None:
+    """Aggregate and display points for users with a specific role only.
+
+    Args:
+        interaction: Discord interaction object
+        role_id: Discord role ID to filter by
+        role_name: Display name of the role (e.g., "6기 셰르파")
+    """
+    guild = interaction.guild
+
+    if guild is None:
+        await interaction.followup.send("❌ 길드 정보를 가져올 수 없습니다.")
+        return
+
+    # Ensure guild members are loaded
+    if not guild.chunked:
+        await guild.chunk()
+
+    role = guild.get_role(role_id)
+
+    if role is None:
+        await interaction.followup.send(f"❌ 역할 ID {role_id}를 찾을 수 없습니다.")
+        return
+
+    # Get member IDs with this role
+    member_ids = {str(member.id) for member in role.members}
+
+    if not member_ids:
+        await interaction.followup.send(f"ℹ️ {role_name} 역할을 가진 멤버가 없습니다.")
+        return
+
+    # Get all users' points and filter by role members
+    all_users = await db.users_collection.find({}).to_list(length=None)
+
+    from app.filters import is_test_user_doc
+
+    filtered_users = []
+    for user_doc in all_users:
+        if is_test_user_doc(user_doc):
+            continue
+        if user_doc.get("discord_id") in member_ids:
+            filtered_users.append(
+                {
+                    "discord_id": user_doc.get("discord_id"),
+                    "username": user_doc.get("username"),
+                    "nickname": user_doc.get("nickname")
+                    or user_doc.get("username")
+                    or user_doc.get("discord_id"),
+                    "total_points": user_doc.get("total_points", 0),
+                }
+            )
+
+    if not filtered_users:
+        await interaction.followup.send(f"ℹ️ {role_name} 역할을 가진 유저가 없습니다.")
+        return
+
+    await _send_points_table(interaction, filtered_users, role_name)
+
+
+async def _send_points_table(
+    interaction: discord.Interaction,
+    users: list[dict],
+    role_name: str,
+) -> None:
+    """Send points table for given users.
+
+    Args:
+        interaction: Discord interaction object
+        users: List of user dictionaries with discord_id, username, nickname, total_points
+        role_name: Display name of the role
+    """
     # Sort by nickname (Korean alphabetical order)
-    users_sorted = sorted(filtered_users, key=lambda u: u["nickname"].lower())
+    users_sorted = sorted(users, key=lambda u: u["nickname"].lower())
 
     # Format as markdown table in code block
     lines = [
@@ -556,8 +634,8 @@ def register_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send(message)
 
         elif action == "gen6_points_summary":
-            # Use refactored helper for all 6기 members
-            await _aggregate_points_by_role(
+            # Use helper for 6기 generation AND 6기 role
+            await _aggregate_points_by_generation_and_role(
                 interaction=interaction,
                 generation=6,
                 role_id=settings.generation_6_role_id,
@@ -565,10 +643,9 @@ def register_commands(bot: commands.Bot) -> None:
             )
 
         elif action == "gen6_sherpa_points_summary":
-            # Use refactored helper for 6기 셰르파 members
-            await _aggregate_points_by_role(
+            # Use helper for ONLY 6기 셰르파 role (not filtered by generation)
+            await _aggregate_points_by_role_only(
                 interaction=interaction,
-                generation=6,
                 role_id=settings.generation_6_sherpa_role_id,
                 role_name="6기 셰르파",
             )

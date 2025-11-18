@@ -1011,7 +1011,7 @@ async def test_gen6_points_summary_message_splitting(mock_interaction, mock_guil
 
 @pytest.mark.asyncio
 async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
-    """Test successful generation 6 Sherpa points summary."""
+    """Test successful generation 6 Sherpa points summary (role only, not filtered by generation)."""
     # Setup mock guild and Sherpa role
     mock_interaction.guild = mock_guild
     mock_guild.chunked = True
@@ -1043,8 +1043,8 @@ async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
 
     assert dao_admin_command is not None
 
-    # Mock database operations - return all 6기 users, but only Sherpas will be filtered
-    mock_all_users = [
+    # Mock database operations - mock users_collection directly
+    mock_user_docs = [
         {
             "discord_id": "555555551",
             "username": "sherpa1",
@@ -1072,7 +1072,10 @@ async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
     ]
 
     with patch("app.commands.db") as mock_db:
-        mock_db.get_generation_points = AsyncMock(return_value=mock_all_users)
+        # Mock the users_collection.find().to_list()
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=mock_user_docs)
+        mock_db.users_collection.find.return_value = mock_cursor
 
         await dao_admin_command.callback(
             mock_interaction,
@@ -1085,7 +1088,7 @@ async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
 
     # Verify
     mock_interaction.response.defer.assert_called_once()
-    mock_db.get_generation_points.assert_called_once_with(6)
+    mock_db.users_collection.find.assert_called_once_with({})
     mock_interaction.followup.send.assert_called_once()
 
     # Check the message content
@@ -1099,7 +1102,7 @@ async def test_gen6_sherpa_points_summary_success(mock_interaction, mock_guild):
     assert "1,800" in sent_message
     assert "셰르파3" in sent_message
     assert "1,600" in sent_message
-    # Should NOT include regular user
+    # Should NOT include regular user (not in role)
     assert "일반유저" not in sent_message
     assert "1,400" not in sent_message
     # Check markdown table format
@@ -1137,17 +1140,14 @@ async def test_gen6_sherpa_points_summary_no_sherpas(mock_interaction, mock_guil
             dao_admin_command = command
             break
 
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_generation_points = AsyncMock(return_value=[])
-
-        await dao_admin_command.callback(
-            mock_interaction,
-            action="gen6_sherpa_points_summary",
-            generation=None,
-            target=None,
-            amount=None,
-            reason=None,
-        )
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="gen6_sherpa_points_summary",
+        generation=None,
+        target=None,
+        amount=None,
+        reason=None,
+    )
 
     sent_message = mock_interaction.followup.send.call_args[0][0]
     assert "ℹ️" in sent_message
