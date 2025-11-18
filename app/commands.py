@@ -12,6 +12,28 @@ from app.services.attendance_service import attendance_service
 from app.services.gratitude_service import gratitude_service
 
 
+def _chunk_lines(lines: list[str], limit: int = 1900) -> list[str]:
+    """Split joined lines into Discord-friendly chunks."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for line in lines:
+        addition = len(line) + 1  # newline when joined
+        if current and current_length + addition > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_length = len(line)
+        else:
+            current.append(line)
+            current_length += addition
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks
+
+
 def register_commands(bot: commands.Bot) -> None:
     """Register all slash and prefix commands on the given bot.
 
@@ -138,7 +160,7 @@ def register_commands(bot: commands.Bot) -> None:
             "• /dao 포인트 — 포인트 및 출석/감사 요약",
             "",
             "**관리자**",
-            "• /dao_admin 출석현황 [기수] [주차] — 주차별 출석 집계",
+            "• /dao_admin 출석현황 [기수] — 자동 주차별 출석 집계",
             "• /dao_admin 6기불러오기 — 6기 역할을 가진 멤버 목록 조회",
             "• /dao_admin 6기포인트집계 — 6기 전체 포인트 집계 (닉네임 순)",
             "• /dao_admin 지급 @유저 [수량] [사유] — 특정 유저에게 포인트 지급",
@@ -184,7 +206,6 @@ def register_commands(bot: commands.Bot) -> None:
     @app_commands.describe(
         action="수행할 작업",
         generation="기수",
-        week="주차",
         target="대상 유저",
         amount="포인트 수량 (양수)",
         reason="사유",
@@ -203,7 +224,6 @@ def register_commands(bot: commands.Bot) -> None:
         interaction: discord.Interaction,
         action: str,
         generation: int | None = None,
-        week: int | None = None,
         target: discord.User | None = None,
         amount: int | None = None,
         reason: str | None = None,
@@ -211,25 +231,33 @@ def register_commands(bot: commands.Bot) -> None:
         await interaction.response.defer()
 
         if action == "weekly_summary":
-            if generation is None or week is None:
+            if generation is None:
                 await interaction.followup.send(
-                    "❌ 기수와 주차를 모두 입력해주세요.\n예: `/dao_admin 출석현황 6 1`"
+                    "❌ 기수를 입력해주세요.\n예: `/dao_admin 출석현황 6`"
                 )
                 return
 
-            overview = await db.get_attendance_overview(generation, week)
+            overview = await db.get_attendance_overview(generation)
+            max_week = overview.get("up_to_week", 0)
+
+            if max_week == 0:
+                await interaction.followup.send(
+                    f"ℹ️ {generation}기 출석 데이터가 없습니다."
+                )
+                return
 
             # Header
             lines: list[str] = []
-            lines.append(f"📅 {generation}기 — {week}주차 기준 출석 현황")
+            lines.append(f"📅 {generation}기 — 1~{max_week}주차 출석 현황")
 
             # Weekly totals
-            weekly_str = ", ".join(
-                [
-                    f"{item['week']}주차: {item['count']}명"
-                    for item in overview["weekly_counts"]
-                ]
-            )
+            weekly_counts = overview["weekly_counts"]
+            if weekly_counts:
+                weekly_str = ", ".join(
+                    [f"{item['week']}주차: {item['count']}명" for item in weekly_counts]
+                )
+            else:
+                weekly_str = "데이터 없음"
             lines.append(f"• 주차별 총 참여자 수: {weekly_str}")
             lines.append(
                 f"• 누적 참여 횟수: {overview['total_attendance']}건 (고유 인원 {overview['unique_participants']}명)"
@@ -241,26 +269,34 @@ def register_commands(bot: commands.Bot) -> None:
             nicknames = overview["nicknames"]
             if participants:
                 lines.append("")
-                lines.append("**개인별 출석 현황:**")
-                # Sort by nickname for readability
+                lines.append("**개인별 출석 현황 (✅ 출석 / ⬜ 미출석):**")
+                week_header = " ".join(f"{w:02d}" for w in range(1, max_week + 1))
+                lines.append(f"주차: {week_header}")
+
                 participants_sorted = sorted(
                     participants,
-                    key=lambda p: (nicknames.get(p["user_id"], p["user_id"]).lower()),
+                    key=lambda p: (
+                        -len(p.get("weeks", [])),
+                        nicknames.get(p["user_id"], p["user_id"]).lower(),
+                    ),
                 )
-                max_rows = 50  # limit for Discord message length
-                for p in participants_sorted[:max_rows]:
+                for p in participants_sorted:
                     name = nicknames.get(
                         p["user_id"], p["user_id"]
                     )  # nickname/username
                     attended = set(p.get("weeks", []))
-                    marks = []
-                    for w in range(1, week + 1):
-                        marks.append(f"{w}주차 {'✅' if w in attended else '❌'}")
-                    lines.append(f"• {name} — {', '.join(marks)}")
-                if len(participants_sorted) > max_rows:
-                    lines.append(f"... 외 {len(participants_sorted) - max_rows}명")
+                    attendance_count = len(attended)
+                    marks = " ".join(
+                        "✅" if w in attended else "⬜" for w in range(1, max_week + 1)
+                    )
+                    lines.append(f"• {name} — {attendance_count}회 | {marks}")
+            else:
+                lines.append("")
+                lines.append("개인별 출석 데이터가 없습니다.")
 
-            await interaction.followup.send("\n".join(lines))
+            chunks = _chunk_lines(lines)
+            for idx, chunk in enumerate(chunks):
+                await interaction.followup.send(chunk)
 
         elif action == "fetch_gen6_members":
             # Fetch members with 6기 역할

@@ -78,7 +78,7 @@ async def test_fetch_gen6_members_success(
 
     # Execute the command callback directly
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     # Verify
@@ -92,6 +92,84 @@ async def test_fetch_gen6_members_success(
     assert "총 5명" in sent_message
     assert "유저0" in sent_message
     assert "유저4" in sent_message
+
+
+@pytest.mark.asyncio
+async def test_weekly_summary_requires_generation(mock_interaction):
+    """weekly_summary should require generation input."""
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    assert dao_admin_command is not None
+
+    await dao_admin_command.callback(
+        mock_interaction, action="weekly_summary", generation=None
+    )
+
+    mock_interaction.followup.send.assert_called_with(
+        "❌ 기수를 입력해주세요.\n예: `/dao_admin 출석현황 6`"
+    )
+
+
+@pytest.mark.asyncio
+async def test_weekly_summary_auto_weeks_and_counts(mock_interaction):
+    """weekly_summary automatically spans full weeks and shows per-user totals."""
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    assert dao_admin_command is not None
+
+    mock_overview = {
+        "generation": 6,
+        "up_to_week": 3,
+        "weekly_counts": [
+            {"week": 1, "count": 2},
+            {"week": 2, "count": 1},
+            {"week": 3, "count": 3},
+        ],
+        "total_attendance": 6,
+        "unique_participants": 3,
+        "overall_rate": 66.7,
+        "participants": [
+            {"user_id": "1", "weeks": [1, 2, 3]},
+            {"user_id": "2", "weeks": [1]},
+            {"user_id": "3", "weeks": [3]},
+        ],
+        "nicknames": {"1": "Alice", "2": "Bob", "3": "Cara"},
+    }
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
+
+        await dao_admin_command.callback(
+            mock_interaction, action="weekly_summary", generation=6
+        )
+
+    mock_db.get_attendance_overview.assert_awaited_once_with(6)
+    mock_interaction.followup.send.assert_called_once()
+    message = mock_interaction.followup.send.call_args[0][0]
+    assert "1~3주차" in message
+    assert "1주차: 2명" in message
+    assert "Alice — 3회" in message
+    assert "Bob — 1회" in message
+    assert "Cara — 1회" in message
+    assert "✅" in message and "⬜" in message
 
 
 @pytest.mark.asyncio
@@ -111,7 +189,7 @@ async def test_fetch_gen6_members_no_guild(mock_interaction):
             break
 
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     mock_interaction.response.defer.assert_called_once()
@@ -138,7 +216,7 @@ async def test_fetch_gen6_members_role_not_found(mock_interaction, mock_guild):
             break
 
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     mock_interaction.response.defer.assert_called_once()
@@ -169,7 +247,7 @@ async def test_fetch_gen6_members_no_members(mock_interaction, mock_guild, mock_
             break
 
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     mock_interaction.response.defer.assert_called_once()
@@ -202,7 +280,7 @@ async def test_fetch_gen6_members_guild_chunking(
             break
 
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     # Verify guild.chunk() was called
@@ -240,7 +318,7 @@ async def test_fetch_gen6_members_message_splitting(
             break
 
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None, week=None
+        mock_interaction, action="fetch_gen6_members", generation=None
     )
 
     # Verify multiple messages were sent
@@ -335,7 +413,6 @@ async def test_grant_points_success(
             mock_interaction,
             action="grant_points",
             generation=None,
-            week=None,
             target=mock_target_user,
             amount=100,
             reason="이벤트 참여 보상",
@@ -401,7 +478,6 @@ async def test_deduct_points_success(
             mock_interaction,
             action="deduct_points",
             generation=None,
-            week=None,
             target=mock_target_user,
             amount=50,
             reason="규정 위반",
@@ -459,7 +535,6 @@ async def test_deduct_points_insufficient_balance(
             mock_interaction,
             action="deduct_points",
             generation=None,
-            week=None,
             target=mock_target_user,
             amount=50,
             reason="테스트",
@@ -505,7 +580,6 @@ async def test_grant_points_no_admin_role(
         mock_interaction,
         action="grant_points",
         generation=None,
-        week=None,
         target=mock_target_user,
         amount=100,
         reason="테스트",
@@ -542,7 +616,6 @@ async def test_grant_points_missing_parameters(
         mock_interaction,
         action="grant_points",
         generation=None,
-        week=None,
         target=None,
         amount=100,
         reason="테스트",
@@ -579,7 +652,6 @@ async def test_grant_points_invalid_amount(
         mock_interaction,
         action="grant_points",
         generation=None,
-        week=None,
         target=mock_target_user,
         amount=0,
         reason="테스트",
@@ -609,7 +681,6 @@ async def test_grant_points_no_guild(mock_interaction, mock_target_user):
         mock_interaction,
         action="grant_points",
         generation=None,
-        week=None,
         target=mock_target_user,
         amount=100,
         reason="테스트",
@@ -666,7 +737,6 @@ async def test_gen6_points_summary_success(mock_interaction):
             mock_interaction,
             action="gen6_points_summary",
             generation=None,
-            week=None,
             target=None,
             amount=None,
             reason=None,
@@ -721,7 +791,6 @@ async def test_gen6_points_summary_no_users(mock_interaction):
             mock_interaction,
             action="gen6_points_summary",
             generation=None,
-            week=None,
             target=None,
             amount=None,
             reason=None,
@@ -767,7 +836,6 @@ async def test_gen6_points_summary_message_splitting(mock_interaction):
             mock_interaction,
             action="gen6_points_summary",
             generation=None,
-            week=None,
             target=None,
             amount=None,
             reason=None,

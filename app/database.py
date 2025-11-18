@@ -413,7 +413,7 @@ class Database:
         }
 
     async def get_attendance_overview(
-        self, generation: int, up_to_week: int
+        self, generation: int, up_to_week: int | None = None
     ) -> dict[str, Any]:
         """Aggregate attendance from week 1..N (inclusive) for admin overview.
 
@@ -425,6 +425,14 @@ class Database:
         - unique_participants: count of unique users across all weeks
         """
         self.ensure_connected()
+
+        if up_to_week is None:
+            latest = self.attendance_collection.find_one(
+                {"generation": generation},
+                sort=[("week", DESCENDING)],
+                projection={"week": 1, "_id": 0},
+            )
+            up_to_week = int(latest["week"]) if latest and latest.get("week") else 0
 
         # Unique participants per (week, user)
         match = {"generation": generation, "week": {"$lte": up_to_week}}
