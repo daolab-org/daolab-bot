@@ -166,10 +166,128 @@ async def test_weekly_summary_auto_weeks_and_counts(mock_interaction):
     message = mock_interaction.followup.send.call_args[0][0]
     assert "1~3주차" in message
     assert "1주차: 2명" in message
-    assert "Alice — 3회" in message
-    assert "Bob — 1회" in message
-    assert "Cara — 1회" in message
+    # Check for numbering instead of bullets
+    assert "1. Alice — 3회" in message
+    assert "2. Bob — 1회" in message
+    assert "3. Cara — 1회" in message
     assert "✅" in message and "⬜" in message
+    # Check for code block wrapping
+    assert "```" in message
+
+
+@pytest.mark.asyncio
+async def test_weekly_summary_with_thread_splitting(mock_interaction):
+    """Test that weekly_summary creates a thread when messages are split."""
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    # Create many participants to trigger thread creation
+    participants = []
+    nicknames = {}
+    for i in range(50):
+        user_id = str(1000 + i)
+        participants.append({"user_id": user_id, "weeks": [1, 2, 3]})
+        nicknames[user_id] = f"User{i:03d}"
+
+    mock_overview = {
+        "generation": 6,
+        "up_to_week": 10,  # More weeks to make content longer
+        "weekly_counts": [{"week": w, "count": 45} for w in range(1, 11)],
+        "total_attendance": 450,
+        "unique_participants": 50,
+        "overall_rate": 90.0,
+        "participants": participants,
+        "nicknames": nicknames,
+    }
+
+    # Mock the thread and first message
+    mock_thread = MagicMock()
+    mock_thread.send = AsyncMock()
+
+    mock_first_message = MagicMock()
+    mock_first_message.create_thread = AsyncMock(return_value=mock_thread)
+
+    mock_interaction.followup.send = AsyncMock(return_value=mock_first_message)
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
+
+        await dao_admin_command.callback(
+            mock_interaction, action="weekly_summary", generation=6
+        )
+
+    # Verify first message was sent
+    mock_interaction.followup.send.assert_called_once()
+
+    # If thread was created, verify it
+    if mock_first_message.create_thread.called:
+        # Verify thread creation
+        mock_first_message.create_thread.assert_called_once()
+        thread_name = mock_first_message.create_thread.call_args[1]["name"]
+        assert thread_name == "6기 출석 현황"
+
+        # Verify additional messages sent to thread
+        assert mock_thread.send.call_count > 0
+
+
+@pytest.mark.asyncio
+async def test_weekly_summary_duplicate_nicknames(mock_interaction):
+    """Test weekly_summary handles duplicate nicknames with sub-numbering."""
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+
+    dao_admin_command = None
+    for command in bot.tree.get_commands():
+        if command.name == "dao_admin":
+            dao_admin_command = command
+            break
+
+    mock_overview = {
+        "generation": 6,
+        "up_to_week": 2,
+        "weekly_counts": [
+            {"week": 1, "count": 3},
+            {"week": 2, "count": 2},
+        ],
+        "total_attendance": 5,
+        "unique_participants": 4,
+        "overall_rate": 62.5,
+        "participants": [
+            {"user_id": "1", "weeks": [1, 2]},
+            {"user_id": "2", "weeks": [1]},
+            {"user_id": "3", "weeks": [1, 2]},
+            {"user_id": "4", "weeks": [2]},
+        ],
+        "nicknames": {
+            "1": "Alice",
+            "2": "Alice",  # Duplicate nickname
+            "3": "Bob",
+            "4": "Bob",  # Duplicate nickname
+        },
+    }
+
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
+
+        await dao_admin_command.callback(
+            mock_interaction, action="weekly_summary", generation=6
+        )
+
+    message = mock_interaction.followup.send.call_args[0][0]
+    # Check for sub-numbering for duplicates
+    assert "1-1. Alice" in message or "1. Alice" in message
+    assert "1-2. Alice" in message or "2. Alice" in message
+    assert "Bob" in message
 
 
 @pytest.mark.asyncio

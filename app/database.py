@@ -437,32 +437,42 @@ class Database:
         # Unique participants per (week, user)
         match = {"generation": generation, "week": {"$lte": up_to_week}}
 
-        # 1) Per-user weeks attended
+        # 1) Get all users for this generation from users collection
+        from app.filters import is_test_user_doc
+
+        all_gen_users_cursor = self.users_collection.find({"generation": generation})
+        all_gen_users = list(all_gen_users_cursor)
+
+        # Build nickname map and filter test users
+        nickname_map_all: dict[str, str] = {}
+        test_user_ids: set[str] = set()
+        for u in all_gen_users:
+            nickname = u.get("nickname") or u.get("username") or u.get("discord_id")
+            uid = u.get("discord_id")
+            if uid:
+                nickname_map_all[uid] = nickname
+                if is_test_user_doc(u):
+                    test_user_ids.add(uid)
+
+        # Get actual attendance records
         per_user_pipeline = [
             {"$match": match},
             {"$group": {"_id": "$user_id", "weeks": {"$addToSet": "$week"}}},
             {"$sort": {"_id": 1}},
         ]
         per_user_docs = list(self.attendance_collection.aggregate(per_user_pipeline))
-        participants_all = [
-            {"user_id": doc["_id"], "weeks": sorted(doc.get("weeks", []))}
-            for doc in per_user_docs
-        ]
+        attendance_map = {
+            doc["_id"]: sorted(doc.get("weeks", [])) for doc in per_user_docs
+        }
 
-        # 2) Nickname map and filter tests
-        user_ids_all = [p["user_id"] for p in participants_all]
-        nickname_map_all: dict[str, str] = {}
-        from app.filters import is_test_user_doc
-
-        test_user_ids: set[str] = set()
-        if user_ids_all:
-            cursor = self.users_collection.find({"discord_id": {"$in": user_ids_all}})
-            for u in cursor:
-                nickname = u.get("nickname") or u.get("username") or u.get("discord_id")
-                uid = u.get("discord_id")
-                nickname_map_all[uid] = nickname
-                if is_test_user_doc(u):
-                    test_user_ids.add(uid)
+        # 2) Create participants list with ALL generation users (including those with no attendance)
+        participants_all = []
+        for u in all_gen_users:
+            uid = u.get("discord_id")
+            if uid:
+                participants_all.append(
+                    {"user_id": uid, "weeks": attendance_map.get(uid, [])}
+                )
 
         participants = [
             p for p in participants_all if p["user_id"] not in test_user_ids

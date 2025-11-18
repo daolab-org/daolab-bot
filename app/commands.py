@@ -264,39 +264,113 @@ def register_commands(bot: commands.Bot) -> None:
             )
             lines.append(f"• 전체 참여율: {overview['overall_rate']}%")
 
-            # Per-user matrix, nickname-based, no mentions
+            # Get participants data
             participants = overview["participants"]
             nicknames = overview["nicknames"]
-            if participants:
-                lines.append("")
-                lines.append("**개인별 출석 현황 (✅ 출석 / ⬜ 미출석):**")
-                week_header = " ".join(f"{w:02d}" for w in range(1, max_week + 1))
-                lines.append(f"주차: {week_header}")
 
+            # Discord message length limit handling (2000 chars max)
+            # Split into chunks if needed
+            chunks = []
+            header_text = "\n".join(lines)
+
+            if participants:
+                # Individual attendance section
+                attendance_header = "\n\n**개인별 출석 현황 (✅ 출석 / ⬜ 미출석):**"
+                week_header = (
+                    f"주차: {' '.join(f'{w:02d}' for w in range(1, max_week + 1))}"
+                )
+
+                # Start first chunk with full header
+                current_chunk = [header_text, attendance_header, "```", week_header]
+                current_length = (
+                    sum(len(line) for line in current_chunk) + len(current_chunk) - 1
+                )
+
+                # Add participant lines - sorted by nickname with numbering
                 participants_sorted = sorted(
                     participants,
-                    key=lambda p: (
-                        -len(p.get("weeks", [])),
-                        nicknames.get(p["user_id"], p["user_id"]).lower(),
-                    ),
+                    key=lambda p: nicknames.get(p["user_id"], p["user_id"]).lower(),
                 )
+
+                # Build numbering with duplicate nickname handling
+                nickname_count: dict[str, int] = {}
                 for p in participants_sorted:
-                    name = nicknames.get(
-                        p["user_id"], p["user_id"]
-                    )  # nickname/username
+                    name = nicknames.get(p["user_id"], p["user_id"])
+                    nickname_count[name] = nickname_count.get(name, 0) + 1
+
+                nickname_index: dict[str, int] = {}
+                current_number = 1
+
+                for p in participants_sorted:
+                    name = nicknames.get(p["user_id"], p["user_id"])
                     attended = set(p.get("weeks", []))
                     attendance_count = len(attended)
                     marks = " ".join(
                         "✅" if w in attended else "⬜" for w in range(1, max_week + 1)
                     )
-                    lines.append(f"• {name} — {attendance_count}회 | {marks}")
-            else:
-                lines.append("")
-                lines.append("개인별 출석 데이터가 없습니다.")
 
-            chunks = _chunk_lines(lines)
-            for idx, chunk in enumerate(chunks):
-                await interaction.followup.send(chunk)
+                    # Determine numbering
+                    if nickname_count[name] > 1:
+                        # Multiple users with same nickname
+                        if name not in nickname_index:
+                            nickname_index[name] = 1
+                        else:
+                            nickname_index[name] += 1
+                        number_str = f"{current_number}-{nickname_index[name]}"
+                        # Only increment current_number after last duplicate
+                        if nickname_index[name] == nickname_count[name]:
+                            current_number += 1
+                    else:
+                        # Unique nickname
+                        number_str = str(current_number)
+                        current_number += 1
+
+                    line = f"{number_str}. {name} — {attendance_count}회 | {marks}"
+                    line_length = len(line) + 1  # +1 for newline
+
+                    # Check if adding this line would exceed limit (leaving room for closing ```)
+                    if current_length + line_length + 10 > 1800:
+                        # Finalize current chunk with closing backticks
+                        current_chunk.append("```")
+                        chunks.append("\n".join(current_chunk))
+                        # Start new chunk with continuation header
+                        current_chunk = [
+                            f"📅 {generation}기 출석 현황 (계속)",
+                            attendance_header,
+                            "```",
+                            week_header,
+                            line,
+                        ]
+                        current_length = (
+                            sum(len(l) for l in current_chunk) + len(current_chunk) - 1
+                        )
+                    else:
+                        current_chunk.append(line)
+                        current_length += line_length
+
+                # Add final chunk if it has content, with closing backticks
+                if len(current_chunk) > 4:  # More than just headers
+                    current_chunk.append("```")
+                    chunks.append("\n".join(current_chunk))
+            else:
+                # No participants case
+                chunks.append("\n".join(lines))
+
+            # Send all chunks in a thread
+            if chunks:
+                # Send first message and create thread
+                first_message = await interaction.followup.send(chunks[0])
+
+                if len(chunks) > 1:
+                    # Create thread for additional chunks
+                    thread = await first_message.create_thread(
+                        name=f"{generation}기 출석 현황",
+                        auto_archive_duration=1440,  # 24 hours
+                    )
+
+                    # Send remaining chunks in the thread
+                    for chunk in chunks[1:]:
+                        await thread.send(chunk)
 
         elif action == "fetch_gen6_members":
             # Fetch members with 6기 역할
