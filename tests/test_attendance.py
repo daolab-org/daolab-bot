@@ -1,24 +1,23 @@
+"""Tests for attendance service functionality.
+
+Refactored to use shared fixtures from conftest.py for better maintainability
+and consistency across test files.
+"""
+
 import pytest
 from unittest.mock import AsyncMock, patch
 from app.services.attendance_service import attendance_service
 from app.database import db
 
 
-@pytest.fixture
-def test_user_data():
-    """Fixture providing test user data."""
-    return {
-        "user_id": "987654321098765432",
-        "username": "TestUser",
-        "generation": 6,
-        "week": 1,
-        "day": 1,
-    }
+# ============================================================================
+# Attendance-Specific Fixtures
+# ============================================================================
 
 
 @pytest.fixture
-def mock_db():
-    """Fixture providing a mocked database."""
+def mock_attendance_db():
+    """Fixture providing a mocked database for attendance operations."""
     with (
         patch.object(db, "users_collection") as mock_users,
         patch.object(db, "transactions_collection") as mock_transactions,
@@ -31,10 +30,13 @@ def mock_db():
         }
 
 
+# ============================================================================
+# Attendance Recording Tests
+# ============================================================================
+
+
 @pytest.mark.asyncio
-async def test_should_record_attendance_when_valid_metadata_provided(
-    test_user_data, mock_db
-):
+async def test_should_record_attendance_when_valid_metadata_provided(test_user_data):
     """유효한 메타데이터가 제공되면 출석이 기록되어야 한다."""
     # Arrange
     expected_message = "출석이 기록되었습니다."
@@ -61,7 +63,7 @@ async def test_should_record_attendance_when_valid_metadata_provided(
 
 @pytest.mark.asyncio
 async def test_should_prevent_duplicate_attendance_when_same_day_submitted(
-    test_user_data, mock_db
+    test_user_data,
 ):
     """같은 날 출석이 다시 제출되면 중복 출석이 방지되어야 한다."""
     # Arrange
@@ -87,10 +89,13 @@ async def test_should_prevent_duplicate_attendance_when_same_day_submitted(
         assert result["message"] == expected_message
 
 
+# ============================================================================
+# Attendance Status Retrieval Tests
+# ============================================================================
+
+
 @pytest.mark.asyncio
-async def test_should_retrieve_attendance_status_when_user_requests(
-    test_user_data, mock_db
-):
+async def test_should_retrieve_attendance_status_when_user_requests(test_user_data):
     """사용자가 요청하면 출석 현황이 조회되어야 한다."""
     # Arrange
     expected_message = "출석 현황: 6기 1주차 1일"
@@ -109,24 +114,33 @@ async def test_should_retrieve_attendance_status_when_user_requests(
         assert expected_message in result["message"]
 
 
+# ============================================================================
+# Database Operation Tests
+# ============================================================================
+
+
 @pytest.mark.asyncio
-async def test_should_retrieve_user_points_when_requested(test_user_data, mock_db):
+async def test_should_retrieve_user_points_when_requested(
+    test_user_data, mock_attendance_db
+):
     """포인트 조회가 요청되면 사용자 포인트가 반환되어야 한다."""
     # Arrange
     expected_points = 100
-    mock_db["get_user_points"].return_value = expected_points
+    mock_attendance_db["get_user_points"].return_value = expected_points
 
     # Act
     points = await db.get_user_points(test_user_data["user_id"])
 
     # Assert
     assert points == expected_points
-    mock_db["get_user_points"].assert_called_once_with(test_user_data["user_id"])
+    mock_attendance_db["get_user_points"].assert_called_once_with(
+        test_user_data["user_id"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_should_retrieve_user_data_when_querying_database(
-    test_user_data, mock_db
+    test_user_data, mock_attendance_db
 ):
     """데이터베이스를 쿼리하면 사용자 데이터가 조회되어야 한다."""
     # Arrange
@@ -136,10 +150,10 @@ async def test_should_retrieve_user_data_when_querying_database(
         "total_points": 100,
         "generation": test_user_data["generation"],
     }
-    mock_db["users_collection"].find_one.return_value = expected_user
+    mock_attendance_db["users_collection"].find_one.return_value = expected_user
 
     # Act
-    user = mock_db["users_collection"].find_one(
+    user = mock_attendance_db["users_collection"].find_one(
         {"discord_id": test_user_data["user_id"]}
     )
 
@@ -153,7 +167,7 @@ async def test_should_retrieve_user_data_when_querying_database(
 
 @pytest.mark.asyncio
 async def test_should_retrieve_transactions_when_querying_user_history(
-    test_user_data, mock_db
+    test_user_data, mock_attendance_db
 ):
     """사용자 기록을 쿼리하면 트랜잭션이 조회되어야 한다."""
     # Arrange
@@ -161,11 +175,15 @@ async def test_should_retrieve_transactions_when_querying_user_history(
         {"user_id": test_user_data["user_id"], "reason": "출석", "points": 10},
         {"user_id": test_user_data["user_id"], "reason": "출석", "points": 10},
     ]
-    mock_db["transactions_collection"].find.return_value = expected_transactions
+    mock_attendance_db[
+        "transactions_collection"
+    ].find.return_value = expected_transactions
 
     # Act
     transactions = list(
-        mock_db["transactions_collection"].find({"user_id": test_user_data["user_id"]})
+        mock_attendance_db["transactions_collection"].find(
+            {"user_id": test_user_data["user_id"]}
+        )
     )
 
     # Assert

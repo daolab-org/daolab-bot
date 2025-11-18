@@ -1,6 +1,8 @@
 """Tests for gratitude feature using mocked database.
 
 All tests use MockDatabase to avoid side effects from real DB connections.
+Refactored to use shared fixtures from conftest.py for better maintainability
+and consistency across test files.
 """
 
 import sys
@@ -16,8 +18,13 @@ from app.models import User, Gratitude
 import pytest
 
 
+# ============================================================================
+# Gratitude-Specific Mock Classes
+# ============================================================================
+
+
 class MockDatabase:
-    """Mock database for testing without side effects"""
+    """Mock database for testing without side effects."""
 
     def __init__(self):
         self.users: dict[str, User] = {}
@@ -102,7 +109,7 @@ class MockDatabase:
 
 
 class MockGratitudeCollection:
-    """Mock gratitude collection for history queries"""
+    """Mock gratitude collection for history queries."""
 
     def __init__(self, gratitudes: list[Gratitude]):
         self.gratitudes = gratitudes
@@ -144,7 +151,7 @@ class MockGratitudeCollection:
 
 
 class MockCursor:
-    """Mock cursor for database queries"""
+    """Mock cursor for database queries."""
 
     def __init__(self, data: list[Any]):
         self.data = data
@@ -166,31 +173,61 @@ class MockCursor:
             }
 
 
+# ============================================================================
+# Gratitude-Specific Fixtures
+# ============================================================================
+
+
 @pytest.fixture
-def mock_db():
-    """Fixture to provide fresh mock database for each test"""
+def mock_gratitude_db():
+    """Fixture to provide fresh mock database for each test.
+
+    Function-scoped to ensure test isolation - each test gets fresh state.
+    """
     return MockDatabase()
 
 
 @pytest.fixture
-def setup_service(mock_db, monkeypatch):
-    """Fixture to setup service with mocked database"""
-    monkeypatch.setattr(gratitude_service, "db", mock_db)
+def setup_gratitude_service(mock_gratitude_db, monkeypatch):
+    """Fixture to setup service with mocked database.
+
+    Composite fixture that patches the gratitude service with the mock database.
+    """
+    monkeypatch.setattr(gratitude_service, "db", mock_gratitude_db)
     return gratitude_service
 
 
+@pytest.fixture
+def gratitude_user_ids():
+    """Fixture providing test user IDs for gratitude operations."""
+    return {
+        "from_id": "123456789012345678",
+        "to_id_1": "123456789012345679",
+        "to_id_2": "123456789012345680",
+        "to_id_3": "123456789012345681",
+        "from_username": "TestUser1",
+        "to_username_1": "TestUser2",
+        "to_username_2": "TestUser3",
+        "to_username_3": "TestUser4",
+    }
+
+
+# ============================================================================
+# Gratitude Sending Tests
+# ============================================================================
+
+
 @pytest.mark.asyncio
-async def test_should_send_gratitude_successfully_when_valid_users(setup_service):
-    """Test: Should send gratitude successfully when valid users provided"""
+async def test_should_send_gratitude_successfully_when_valid_users(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should send gratitude successfully when valid users provided."""
     # Arrange
-    from_id = "123456789012345678"
-    to_id = "123456789012345679"
-    from_username = "TestUser1"
-    to_username = "TestUser2"
+    ids = gratitude_user_ids
 
     # Act
-    result = await setup_service.send_gratitude(
-        from_id, from_username, to_id, to_username
+    result = await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
     )
 
     # Assert
@@ -199,32 +236,33 @@ async def test_should_send_gratitude_successfully_when_valid_users(setup_service
     assert result["from_user"]["points_added"] == 5
     assert result["to_user"]["points_added"] == 5
 
-    from_points = await setup_service.db.get_user_points(from_id)
-    to_points = await setup_service.db.get_user_points(to_id)
+    from_points = await setup_gratitude_service.db.get_user_points(ids["from_id"])
+    to_points = await setup_gratitude_service.db.get_user_points(ids["to_id_1"])
     assert from_points == 5
     assert to_points == 5
 
 
 @pytest.mark.asyncio
-async def test_should_enforce_daily_limit_when_exceeding_two_sends(setup_service):
-    """Test: Should enforce daily limit when exceeding two sends"""
+async def test_should_enforce_daily_limit_when_exceeding_two_sends(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should enforce daily limit when exceeding two sends."""
     # Arrange
-    from_id = "123456789012345678"
-    to_id_1 = "123456789012345679"
-    to_id_2 = "123456789012345680"
-    to_id_3 = "123456789012345681"
+    ids = gratitude_user_ids
 
     # Act - First send (should succeed)
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_1, "TestUser2")
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
+    )
 
     # Act - Second send (should succeed)
-    result_second = await setup_service.send_gratitude(
-        from_id, "TestUser1", to_id_2, "TestUser3"
+    result_second = await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_2"], ids["to_username_2"]
     )
 
     # Act - Third send (should be blocked)
-    result_third = await setup_service.send_gratitude(
-        from_id, "TestUser1", to_id_3, "TestUser4"
+    result_third = await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_3"], ids["to_username_3"]
     )
 
     # Assert
@@ -237,14 +275,16 @@ async def test_should_enforce_daily_limit_when_exceeding_two_sends(setup_service
 
 
 @pytest.mark.asyncio
-async def test_should_prevent_self_gratitude_when_same_user(setup_service):
-    """Test: Should prevent self-gratitude when same user ID"""
+async def test_should_prevent_self_gratitude_when_same_user(setup_gratitude_service):
+    """Test: Should prevent self-gratitude when same user ID."""
     # Arrange
     user_id = "123456789012345678"
     username = "TestUser1"
 
     # Act
-    result = await setup_service.send_gratitude(user_id, username, user_id, username)
+    result = await setup_gratitude_service.send_gratitude(
+        user_id, username, user_id, username
+    )
 
     # Assert
     assert result["success"] is False
@@ -252,18 +292,45 @@ async def test_should_prevent_self_gratitude_when_same_user(setup_service):
 
 
 @pytest.mark.asyncio
-async def test_should_retrieve_gratitude_history_when_user_has_records(setup_service):
-    """Test: Should retrieve gratitude history when user has records"""
+async def test_should_trim_message_when_exceeding_200_chars(setup_gratitude_service):
+    """Test: Should trim message when exceeding 200 characters."""
     # Arrange
     from_id = "123456789012345678"
-    to_id_1 = "123456789012345679"
-    to_id_2 = "123456789012345680"
-
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_1, "TestUser2")
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_2, "TestUser3")
+    to_id = "123456789012345679"
+    long_message = "x" * 250
 
     # Act
-    result = await setup_service.get_gratitude_history(from_id)
+    result = await setup_gratitude_service.send_gratitude(
+        from_id, "TestUser1", to_id, "TestUser2", message=long_message
+    )
+
+    # Assert
+    assert result["success"] is True
+    assert '"' + ("x" * 200) + '"' in result["message"]
+
+
+# ============================================================================
+# Gratitude History and Stats Tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_should_retrieve_gratitude_history_when_user_has_records(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should retrieve gratitude history when user has records."""
+    # Arrange
+    ids = gratitude_user_ids
+
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
+    )
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_2"], ids["to_username_2"]
+    )
+
+    # Act
+    result = await setup_gratitude_service.get_gratitude_history(ids["from_id"])
 
     # Assert
     assert result["success"] is True
@@ -273,18 +340,22 @@ async def test_should_retrieve_gratitude_history_when_user_has_records(setup_ser
 
 
 @pytest.mark.asyncio
-async def test_should_calculate_gratitude_stats_when_user_has_activity(setup_service):
-    """Test: Should calculate gratitude statistics when user has activity"""
+async def test_should_calculate_gratitude_stats_when_user_has_activity(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should calculate gratitude statistics when user has activity."""
     # Arrange
-    from_id = "123456789012345678"
-    to_id_1 = "123456789012345679"
-    to_id_2 = "123456789012345680"
+    ids = gratitude_user_ids
 
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_1, "TestUser2")
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_2, "TestUser3")
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
+    )
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_2"], ids["to_username_2"]
+    )
 
     # Act
-    stats = await setup_service.get_gratitude_stats(from_id)
+    stats = await setup_gratitude_service.get_gratitude_stats(ids["from_id"])
 
     # Assert
     assert stats["total_sent"] == 2
@@ -293,18 +364,22 @@ async def test_should_calculate_gratitude_stats_when_user_has_activity(setup_ser
 
 
 @pytest.mark.asyncio
-async def test_should_return_summary_when_querying_database(setup_service):
-    """Test: Should return summary when querying database"""
+async def test_should_return_summary_when_querying_database(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should return summary when querying database."""
     # Arrange
-    from_id = "123456789012345678"
-    to_id_1 = "123456789012345679"
-    to_id_2 = "123456789012345680"
+    ids = gratitude_user_ids
 
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_1, "TestUser2")
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id_2, "TestUser3")
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
+    )
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_2"], ids["to_username_2"]
+    )
 
     # Act
-    summary = await setup_service.db.get_gratitude_summary(from_id)
+    summary = await setup_gratitude_service.db.get_gratitude_summary(ids["from_id"])
 
     # Assert
     assert summary["total_sent"] == 2
@@ -315,16 +390,19 @@ async def test_should_return_summary_when_querying_database(setup_service):
 
 
 @pytest.mark.asyncio
-async def test_should_track_received_gratitude_when_user_receives(setup_service):
-    """Test: Should track received gratitude when user receives"""
+async def test_should_track_received_gratitude_when_user_receives(
+    setup_gratitude_service, gratitude_user_ids
+):
+    """Test: Should track received gratitude when user receives."""
     # Arrange
-    from_id = "123456789012345678"
-    to_id = "123456789012345679"
+    ids = gratitude_user_ids
 
-    await setup_service.send_gratitude(from_id, "TestUser1", to_id, "TestUser2")
+    await setup_gratitude_service.send_gratitude(
+        ids["from_id"], ids["from_username"], ids["to_id_1"], ids["to_username_1"]
+    )
 
     # Act
-    summary = await setup_service.db.get_gratitude_summary(to_id)
+    summary = await setup_gratitude_service.db.get_gratitude_summary(ids["to_id_1"])
 
     # Assert
     assert summary["total_sent"] == 0
@@ -332,21 +410,3 @@ async def test_should_track_received_gratitude_when_user_receives(setup_service)
     assert summary["has_sent_today"] is False
     assert summary["points_from_sent"] == 0
     assert summary["points_from_received"] == 5
-
-
-@pytest.mark.asyncio
-async def test_should_trim_message_when_exceeding_200_chars(setup_service):
-    """Test: Should trim message when exceeding 200 characters"""
-    # Arrange
-    from_id = "123456789012345678"
-    to_id = "123456789012345679"
-    long_message = "x" * 250
-
-    # Act
-    result = await setup_service.send_gratitude(
-        from_id, "TestUser1", to_id, "TestUser2", message=long_message
-    )
-
-    # Assert
-    assert result["success"] is True
-    assert '"' + ("x" * 200) + '"' in result["message"]
