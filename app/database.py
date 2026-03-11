@@ -112,6 +112,8 @@ class Database:
                 updates["username"] = username
             if nickname and user_data.get("nickname") != nickname:
                 updates["nickname"] = nickname
+            if generation is not None and user_data.get("generation") != generation:
+                updates["generation"] = generation
             if updates:
                 updates["updated_at"] = now_kst()
                 self.users_collection.update_one(
@@ -505,6 +507,117 @@ class Database:
             "participants": participants,
             "nicknames": {
                 p["user_id"]: nickname_map_all.get(p["user_id"], p["user_id"])
+                for p in participants
+            },
+        }
+
+    async def get_attendance_overview_for_user_ids(
+        self, user_ids: list[str], up_to_week: int | None = None
+    ) -> dict[str, Any]:
+        """Aggregate attendance overview for an arbitrary member set."""
+        self.ensure_connected()
+
+        unique_user_ids = list(dict.fromkeys(uid for uid in user_ids if uid))
+        if not unique_user_ids:
+            return {
+                "up_to_week": 0,
+                "weekly_counts": [],
+                "total_attendance": 0,
+                "unique_participants": 0,
+                "overall_rate": 0.0,
+                "participants": [],
+                "nicknames": {},
+            }
+
+        match: dict[str, Any] = {"user_id": {"$in": unique_user_ids}}
+
+        if up_to_week is None:
+            latest = self.attendance_collection.find_one(
+                match,
+                sort=[("week", DESCENDING)],
+                projection={"week": 1, "_id": 0},
+            )
+            up_to_week = int(latest["week"]) if latest and latest.get("week") else 0
+
+        if up_to_week > 0:
+            match["week"] = {"$lte": up_to_week}
+
+        from app.filters import is_test_user_doc
+
+        user_docs = list(
+            self.users_collection.find({"discord_id": {"$in": unique_user_ids}})
+        )
+        nickname_map: dict[str, str] = {}
+        filtered_user_ids: list[str] = []
+
+        for uid in unique_user_ids:
+            user_doc = next(
+                (doc for doc in user_docs if doc.get("discord_id") == uid),
+                None,
+            )
+            if is_test_user_doc(user_doc):
+                continue
+            nickname_map[uid] = (
+                user_doc.get("nickname")
+                or user_doc.get("username")
+                or user_doc.get("discord_id")
+                if user_doc
+                else uid
+            )
+            filtered_user_ids.append(uid)
+
+        if not filtered_user_ids:
+            return {
+                "up_to_week": 0,
+                "weekly_counts": [],
+                "total_attendance": 0,
+                "unique_participants": 0,
+                "overall_rate": 0.0,
+                "participants": [],
+                "nicknames": {},
+            }
+
+        match["user_id"] = {"$in": filtered_user_ids}
+
+        per_user_pipeline = [
+            {"$match": match},
+            {"$group": {"_id": "$user_id", "weeks": {"$addToSet": "$week"}}},
+            {"$sort": {"_id": 1}},
+        ]
+        per_user_docs = list(self.attendance_collection.aggregate(per_user_pipeline))
+        attendance_map = {
+            doc["_id"]: sorted(doc.get("weeks", [])) for doc in per_user_docs
+        }
+
+        participants = [
+            {"user_id": uid, "weeks": attendance_map.get(uid, [])}
+            for uid in filtered_user_ids
+        ]
+
+        weekly_counts = []
+        for week in range(1, up_to_week + 1):
+            count = sum(1 for p in participants if week in set(p.get("weeks", [])))
+            weekly_counts.append({"week": week, "count": count})
+
+        total_attendance = sum(item["count"] for item in weekly_counts)
+        unique_participants = len(participants)
+
+        if unique_participants > 0 and up_to_week > 0:
+            attended_slots = sum(len(p["weeks"]) for p in participants)
+            possible_slots = unique_participants * up_to_week
+            overall_rate = round(attended_slots / possible_slots * 100, 1)
+        else:
+            overall_rate = 0.0
+
+        return {
+            "up_to_week": up_to_week,
+            "weekly_counts": weekly_counts,
+            "total_attendance": total_attendance,
+            "unique_participants": unique_participants,
+            "overall_rate": overall_rate,
+            "participants": participants,
+            "nicknames": {
+                p["user_id"]: nickname_map.get(p["user_id"], p["user_id"])
                 for p in participants
             },
         }

@@ -7,6 +7,7 @@ from app.database import db
 from app.settings import settings
 from app.models import Transaction
 from app.filters import is_test_like_name
+from app.roles import has_role, is_admin
 
 
 def _build_intents() -> discord.Intents:
@@ -168,15 +169,30 @@ class DaoBot(commands.Bot):
         except Exception as e:
             print(f"Failed to send transaction message: {e}")
 
+    async def _can_start_attendance_thread(
+        self, guild: discord.Guild | None, owner_id: int | None
+    ) -> bool:
+        if guild is None or owner_id is None:
+            return False
+
+        member = guild.get_member(owner_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(owner_id)
+            except Exception:
+                return False
+
+        return is_admin(member) or has_role(member, settings.generation_7_role_id)
+
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
     ) -> None:
         """Handle reaction-based attendance approval.
 
         Flow:
-        - Only for threads under the configured attendance channel
+        - Only for threads whose name contains "X주차"
+        - Only when the thread starter is admin or 7기
         - Only when the reactor is admin or has one of the configured manager roles
-        - The reacted message must be in a channel/thread whose name contains "X주차"
         - Day granularity is ignored; a user gets credit once per week when approved
         """
         try:
@@ -207,10 +223,9 @@ class DaoBot(commands.Bot):
             if not isinstance(channel, discord.Thread):
                 return
 
-            # Restrict to threads created under the attendance channel
-            parent = getattr(channel, "parent", None)
-            parent_id = getattr(parent, "id", None)
-            if parent_id != settings.attendance_channel_id:
+            if not await self._can_start_attendance_thread(
+                guild, getattr(channel, "owner_id", None)
+            ):
                 return
 
             # Ensure the bot can access the thread (especially for private threads)
@@ -279,10 +294,9 @@ class DaoBot(commands.Bot):
             print(f"on_raw_reaction_add error: {e}")
 
     async def on_thread_create(self, thread: discord.Thread) -> None:
-        """Post a notice only for attendance-channel threads.
+        """Post a notice for eligible attendance threads.
 
-        If a thread is created under `attendance_channel_id`, its name matches
-        "N주차", and the creator is an admin or has one of the configured manager roles,
+        If a thread name matches "N주차" and the creator is an admin or 7기,
         the bot joins the thread and leaves a short monitoring notice.
         """
         try:
@@ -290,29 +304,9 @@ class DaoBot(commands.Bot):
             if guild is None:
                 return
 
-            # Restrict to threads under the configured attendance channel
-            parent = getattr(thread, "parent", None)
-            parent_id = getattr(parent, "id", None)
-            if parent_id != settings.attendance_channel_id:
-                return
-
-            # Validate creator permissions (admin or manager role)
-            owner_id = getattr(thread, "owner_id", None)
-            if owner_id is None:
-                return
-
-            member = guild.get_member(owner_id)
-            if member is None:
-                try:
-                    member = await guild.fetch_member(owner_id)
-                except Exception:
-                    return
-
-            is_admin = getattr(member.guild_permissions, "administrator", False)
-            has_role = any(
-                r.id in settings.attendance_manager_role_ids for r in member.roles
-            )
-            if not (is_admin or has_role):
+            if not await self._can_start_attendance_thread(
+                guild, getattr(thread, "owner_id", None)
+            ):
                 return
 
             # Check thread name pattern like "6주차"

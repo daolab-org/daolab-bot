@@ -27,17 +27,16 @@ class Settings(BaseSettings):
         1405883481812373564,  # 관리자 역할
         1423336658744639549,  # 출석체크 역할
     )
-    attendance_generation: int = 6
+    attendance_generation: int = 7
     default_generation: int = 999  # 기본 기수 (미확인 사용자)
 
     # 관리자 role ID
     admin_role_id: int = 1405883481812373564  # 관리자 역할
 
-    # 기수별 role ID
-    generation_6_role_id: int = 1413477024982503454  # 6기 역할
-
-    # 기수별 Sherpa role ID
-    generation_6_sherpa_role_id: int = 1405882704825679984  # 6기 셰르파 역할
+    # 운영 role IDs
+    generation_7_role_id: int = 1475683723453141224  # 7기 역할
+    official_crew_role_id: int = 1412166218659532961  # 정식크루 역할
+    friends_role_id: int = 1475500500072927384  # 프렌즈 역할
 
 
 settings = Settings(_env_file=".env", _env_file_encoding="utf-8")

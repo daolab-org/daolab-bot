@@ -16,7 +16,8 @@ class GratitudeService:
         from_nickname: str | None = None,
         to_nickname: str | None = None,
         message: str | None = None,
-        generation: int = 6,
+        from_generation: int | None = None,
+        to_generation: int | None = None,
     ) -> dict[str, Any]:
         # Ensure DB is connected in case another test/module closed it
         self.db.ensure_connected()
@@ -27,10 +28,16 @@ class GratitudeService:
             }
 
         from_user = await self.db.get_or_create_user(
-            from_discord_id, from_username, generation, nickname=from_nickname
+            from_discord_id,
+            from_username,
+            from_generation,
+            nickname=from_nickname,
         )
         to_user = await self.db.get_or_create_user(
-            to_discord_id, to_username, generation, nickname=to_nickname
+            to_discord_id,
+            to_username,
+            to_generation,
+            nickname=to_nickname,
         )
 
         # Enforce new quota: up to 2 sends/day
