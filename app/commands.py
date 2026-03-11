@@ -58,6 +58,17 @@ ROLE_VIEWS: dict[str, RoleViewSpec] = {
     "friends": RoleViewSpec("프렌즈", settings.friends_role_id, is_friends),
 }
 
+ROLE_ACTIONS: dict[str, tuple[str, str]] = {
+    "fetch_gen7_members": ("generation_7", "members"),
+    "gen7_points_summary": ("generation_7", "points"),
+    "fetch_official_crew_members": ("official_crew", "members"),
+    "official_crew_points_summary": ("official_crew", "points"),
+    "official_crew_attendance_summary": ("official_crew", "attendance"),
+    "fetch_friends_members": ("friends", "members"),
+    "friends_points_summary": ("friends", "points"),
+    "friends_attendance_summary": ("friends", "attendance"),
+}
+
 
 async def _get_view_members(
     interaction: discord.Interaction,
@@ -255,7 +266,7 @@ async def _send_role_attendance_summary(
     if overview is None:
         return
 
-    if overview["unique_participants"] == 0:
+    if overview.get("up_to_week", 0) == 0:
         await interaction.followup.send(f"ℹ️ {spec.label} 출석 데이터가 없습니다.")
         return
 
@@ -275,6 +286,27 @@ async def _send_role_attendance_summary(
         f"• 전체 참여율: {overview['overall_rate']}%",
     ]
     await interaction.followup.send("\n".join(lines))
+
+
+async def _handle_role_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> bool:
+    role_action = ROLE_ACTIONS.get(action)
+    if role_action is None:
+        return False
+
+    spec_key, handler_kind = role_action
+    spec = ROLE_VIEWS[spec_key]
+
+    if handler_kind == "members":
+        await _send_role_member_list(interaction, spec)
+    elif handler_kind == "points":
+        await _aggregate_points_by_role_view(interaction, spec)
+    else:
+        await _send_role_attendance_summary(interaction, spec)
+
+    return True
 
 
 async def _send_detailed_attendance_overview(
@@ -633,38 +665,12 @@ def register_commands(bot: commands.Bot) -> None:
                 title=f"{generation}기",
                 thread_name=f"{generation}기 출석 현황",
             )
+            return
 
-        elif action == "fetch_gen7_members":
-            await _send_role_member_list(interaction, ROLE_VIEWS["generation_7"])
+        if await _handle_role_action(interaction, action):
+            return
 
-        elif action == "gen7_points_summary":
-            await _aggregate_points_by_role_view(
-                interaction, ROLE_VIEWS["generation_7"]
-            )
-
-        elif action == "fetch_official_crew_members":
-            await _send_role_member_list(interaction, ROLE_VIEWS["official_crew"])
-
-        elif action == "official_crew_points_summary":
-            await _aggregate_points_by_role_view(
-                interaction, ROLE_VIEWS["official_crew"]
-            )
-
-        elif action == "official_crew_attendance_summary":
-            await _send_role_attendance_summary(
-                interaction, ROLE_VIEWS["official_crew"]
-            )
-
-        elif action == "fetch_friends_members":
-            await _send_role_member_list(interaction, ROLE_VIEWS["friends"])
-
-        elif action == "friends_points_summary":
-            await _aggregate_points_by_role_view(interaction, ROLE_VIEWS["friends"])
-
-        elif action == "friends_attendance_summary":
-            await _send_role_attendance_summary(interaction, ROLE_VIEWS["friends"])
-
-        elif action in ["grant_points", "deduct_points"]:
+        if action in ["grant_points", "deduct_points"]:
             member = (
                 interaction.guild.get_member(interaction.user.id)
                 if interaction.guild
@@ -761,6 +767,9 @@ def register_commands(bot: commands.Bot) -> None:
                 f"• 사유: {reason}\n"
                 f"• 현재 포인트: {updated_points:,} point"
             )
+            return
+
+        await interaction.followup.send("❌ 지원하지 않는 관리자 작업입니다.")
 
     # --------- 수동 동기화 (prefix: !sync) ---------
     @bot.command(name="sync")

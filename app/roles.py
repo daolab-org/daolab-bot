@@ -48,6 +48,6 @@ def classify_member(member: object) -> str:
 
 
 def member_generation(member: object) -> int | None:
-    if has_role(member, settings.generation_7_role_id):
+    if is_generation_7(member):
         return settings.attendance_generation
     return None

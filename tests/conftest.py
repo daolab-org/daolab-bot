@@ -41,20 +41,20 @@ def mock_guild():
 
 @pytest.fixture
 def mock_role():
-    """Create a mock Discord Role object for generation 6."""
+    """Create a mock Discord Role object for generation 7."""
     role = MagicMock(spec=Role)
-    role.name = "6기"
-    role.id = settings.generation_6_role_id
+    role.name = "7기"
+    role.id = settings.generation_7_role_id
     role.members = []
     return role
 
 
 @pytest.fixture
 def mock_sherpa_role():
-    """Create a mock Discord Role object for generation 6 Sherpa."""
+    """Create a mock Discord Role object for official crew."""
     role = MagicMock(spec=Role)
-    role.name = "6기 셰르파"
-    role.id = settings.generation_6_sherpa_role_id
+    role.name = "정식크루"
+    role.id = settings.official_crew_role_id
     role.members = []
     return role
 
@@ -132,7 +132,7 @@ def test_user_data():
     return {
         "user_id": "987654321098765432",
         "username": "TestUser",
-        "generation": 6,
+        "generation": 7,
         "week": 1,
         "day": 1,
     }
@@ -240,9 +240,9 @@ def point_operation_setup(
 
 @pytest.fixture(
     params=[
-        {"generation": 6, "week": 1, "day": 1},
-        {"generation": 6, "week": 2, "day": 3},
-        {"generation": 6, "week": 3, "day": 5},
+        {"generation": 7, "week": 1, "day": 1},
+        {"generation": 7, "week": 2, "day": 3},
+        {"generation": 7, "week": 3, "day": 5},
     ]
 )
 def attendance_metadata(request):

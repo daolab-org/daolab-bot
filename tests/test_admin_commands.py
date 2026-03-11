@@ -1,571 +1,283 @@
-"""Tests for admin commands, specifically the fetch_gen6_members functionality.
+"""Tests for updated dao_admin role-based commands."""
 
-Refactored to use shared fixtures from conftest.py for better maintainability
-and consistency across test files.
-"""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from discord import Member
+from discord import Guild, Interaction, Member, Role, User
+
+from app.commands import register_commands
 from app.settings import settings
 
 
-# ============================================================================
-# Generation 6 Member Fetch Tests
-# ============================================================================
+def _find_command(bot, name: str):
+    for command in bot.tree.get_commands():
+        if command.name == name:
+            return command
+    return None
+
+
+@pytest.fixture
+def mock_interaction():
+    interaction = MagicMock(spec=Interaction)
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    interaction.guild = None
+    return interaction
+
+
+@pytest.fixture
+def mock_guild():
+    guild = MagicMock(spec=Guild)
+    guild.chunked = True
+    guild.chunk = AsyncMock()
+    guild.get_role = MagicMock()
+    guild.get_member = MagicMock()
+    return guild
+
+
+@pytest.fixture
+def dao_admin_command():
+    from app.bot import DaoBot
+
+    bot = DaoBot()
+    register_commands(bot)
+    command = _find_command(bot, "dao_admin")
+    assert command is not None
+    return command
+
+
+def _make_member(
+    member_id: int,
+    *,
+    name: str,
+    display_name: str,
+    role_ids: list[int] | None = None,
+    administrator: bool = False,
+):
+    member = MagicMock(spec=Member)
+    member.id = member_id
+    member.name = name
+    member.display_name = display_name
+    member.roles = [SimpleNamespace(id=role_id) for role_id in (role_ids or [])]
+    member.guild_permissions = SimpleNamespace(administrator=administrator)
+    return member
+
+
+def _make_role(name: str, role_id: int, members: list[Member]):
+    role = MagicMock(spec=Role)
+    role.name = name
+    role.id = role_id
+    role.members = members
+    return role
+
+
+@pytest.fixture
+def mock_admin_member():
+    return _make_member(
+        123456789,
+        name="admin_user",
+        display_name="관리자",
+        role_ids=[settings.admin_role_id],
+        administrator=True,
+    )
+
+
+@pytest.fixture
+def mock_target_user():
+    user = MagicMock(spec=User)
+    user.id = 987654321
+    user.name = "target_user"
+    user.bot = False
+    return user
 
 
 @pytest.mark.asyncio
-async def test_should_fetch_gen6_members_successfully_when_role_has_members(
-    mock_interaction, mock_guild, mock_role, mock_members, dao_admin_command
+async def test_fetch_gen7_members_success(
+    dao_admin_command, mock_interaction, mock_guild
 ):
-    """Test successful fetching of generation 6 members."""
-    # Arrange
-    mock_role.members = mock_members
-    mock_guild.get_role.return_value = mock_role
+    generation_member = _make_member(
+        1001,
+        name="user1",
+        display_name="유저1",
+        role_ids=[settings.generation_7_role_id],
+    )
+    transitioned_member = _make_member(
+        1002,
+        name="user2",
+        display_name="전환유저",
+        role_ids=[settings.generation_7_role_id, settings.official_crew_role_id],
+    )
+    role = _make_role(
+        "7기", settings.generation_7_role_id, [generation_member, transitioned_member]
+    )
+    mock_guild.get_role.return_value = role
     mock_interaction.guild = mock_guild
 
-    # Act
     await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
+        mock_interaction, action="fetch_gen7_members", generation=None
     )
-
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_guild.get_role.assert_called_once_with(settings.generation_6_role_id)
-    mock_interaction.followup.send.assert_called_once()
 
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "6기" in sent_message
-    assert "총 5명" in sent_message
-    assert "유저0" in sent_message
-    assert "유저4" in sent_message
+    assert "7기 멤버 목록" in sent_message
+    assert "총 1명" in sent_message
+    assert "유저1" in sent_message
+    assert "전환유저" not in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_return_error_when_guild_is_none(
-    mock_interaction, dao_admin_command
-):
-    """Test when guild is None."""
-    # Arrange
-    mock_interaction.guild = None
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
-    )
-
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_interaction.followup.send.assert_called_once_with(
-        "❌ 길드 정보를 가져올 수 없습니다."
-    )
-
-
-@pytest.mark.asyncio
-async def test_should_return_error_when_role_not_found(
-    mock_interaction, mock_guild, dao_admin_command
-):
-    """Test when role is not found."""
-    # Arrange
-    mock_guild.get_role.return_value = None
-    mock_interaction.guild = mock_guild
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
-    )
-
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_guild.get_role.assert_called_once_with(settings.generation_6_role_id)
-
-    sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "❌ 역할 ID" in sent_message
-    assert "찾을 수 없습니다" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_return_info_message_when_role_has_no_members(
-    mock_interaction, mock_guild, mock_role, dao_admin_command
-):
-    """Test when role has no members."""
-    # Arrange
-    mock_role.members = []
-    mock_guild.get_role.return_value = mock_role
-    mock_interaction.guild = mock_guild
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
-    )
-
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-
-    sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "ℹ️" in sent_message
-    assert "역할을 가진 멤버가 없습니다" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_call_guild_chunk_when_guild_is_not_chunked(
-    mock_interaction, mock_guild, mock_role, mock_members, dao_admin_command
-):
-    """Test guild chunking when guild is not chunked."""
-    # Arrange
-    mock_guild.chunked = False
-    mock_role.members = mock_members
-    mock_guild.get_role.return_value = mock_role
-    mock_interaction.guild = mock_guild
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
-    )
-
-    # Assert
-    mock_guild.chunk.assert_called_once()
-    mock_interaction.followup.send.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_should_split_messages_when_content_exceeds_2000_characters(
-    mock_interaction, mock_guild, mock_role, dao_admin_command
-):
-    """Test message splitting when content exceeds 2000 characters."""
-    # Arrange
-    many_members = []
-    for i in range(100):
-        member = MagicMock(spec=Member)
-        member.id = 1000000000000000000 + i
-        member.name = f"verylongusername{i}" * 5
-        member.display_name = f"매우긴닉네임{i}" * 5
-        many_members.append(member)
-
-    mock_role.members = many_members
-    mock_guild.get_role.return_value = mock_role
-    mock_interaction.guild = mock_guild
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction, action="fetch_gen6_members", generation=None
-    )
-
-    # Assert
-    assert mock_interaction.followup.send.call_count > 1, (
-        "Should send multiple messages for large member list"
-    )
-
-    for call in mock_interaction.followup.send.call_args_list:
-        message = call[0][0]
-        assert len(message) <= 2000, (
-            f"Message length {len(message)} exceeds 2000 characters"
-        )
-
-
-# ============================================================================
-# Weekly Summary Tests
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_should_require_generation_when_requesting_weekly_summary(
-    mock_interaction, dao_admin_command
-):
-    """weekly_summary should require generation input."""
-    # Act
+async def test_weekly_summary_requires_generation(dao_admin_command, mock_interaction):
     await dao_admin_command.callback(
         mock_interaction, action="weekly_summary", generation=None
     )
 
-    # Assert
     mock_interaction.followup.send.assert_called_with(
-        "❌ 기수를 입력해주세요.\n예: `/dao_admin 출석현황 6`"
+        "❌ 기수를 입력해주세요.\n예: `/dao_admin 출석현황 7`"
     )
 
 
 @pytest.mark.asyncio
-async def test_should_show_weekly_summary_with_auto_weeks_and_counts_when_valid_generation(
-    mock_interaction, dao_admin_command
+async def test_weekly_summary_generation7_uses_role_based_overview(
+    dao_admin_command, mock_interaction, mock_guild
 ):
-    """weekly_summary automatically spans full weeks and shows per-user totals."""
-    # Arrange
-    mock_overview = {
-        "generation": 6,
-        "up_to_week": 3,
-        "weekly_counts": [
-            {"week": 1, "count": 2},
-            {"week": 2, "count": 1},
-            {"week": 3, "count": 3},
-        ],
-        "total_attendance": 6,
-        "unique_participants": 3,
-        "overall_rate": 66.7,
-        "participants": [
-            {"user_id": "1", "weeks": [1, 2, 3]},
-            {"user_id": "2", "weeks": [1]},
-            {"user_id": "3", "weeks": [3]},
-        ],
-        "nicknames": {"1": "Alice", "2": "Bob", "3": "Cara"},
-    }
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
-
-        await dao_admin_command.callback(
-            mock_interaction, action="weekly_summary", generation=6
-        )
-
-    # Assert
-    mock_db.get_attendance_overview.assert_awaited_once_with(6)
-    mock_interaction.followup.send.assert_called_once()
-    message = mock_interaction.followup.send.call_args[0][0]
-    assert "1~3주차" in message
-    assert "1주차: 2명" in message
-    assert "1. Alice — 3회" in message
-    assert "2. Bob — 1회" in message
-    assert "3. Cara — 1회" in message
-    assert "✅" in message and "⬜" in message
-    assert "```" in message
-
-
-@pytest.mark.asyncio
-async def test_should_create_thread_when_weekly_summary_messages_are_split(
-    mock_interaction, dao_admin_command
-):
-    """Test that weekly_summary creates a thread when messages are split."""
-    # Arrange
-    participants = []
-    nicknames = {}
-    for i in range(50):
-        user_id = str(1000 + i)
-        participants.append({"user_id": user_id, "weeks": [1, 2, 3]})
-        nicknames[user_id] = f"User{i:03d}"
+    member = _make_member(
+        1001,
+        name="user1",
+        display_name="유저1",
+        role_ids=[settings.generation_7_role_id],
+    )
+    mock_guild.get_role.return_value = _make_role(
+        "7기", settings.generation_7_role_id, [member]
+    )
+    mock_interaction.guild = mock_guild
 
     mock_overview = {
-        "generation": 6,
-        "up_to_week": 10,
-        "weekly_counts": [{"week": w, "count": 45} for w in range(1, 11)],
-        "total_attendance": 450,
-        "unique_participants": 50,
-        "overall_rate": 90.0,
-        "participants": participants,
-        "nicknames": nicknames,
+        "up_to_week": 2,
+        "weekly_counts": [{"week": 1, "count": 1}, {"week": 2, "count": 1}],
+        "total_attendance": 2,
+        "unique_participants": 1,
+        "overall_rate": 100.0,
+        "participants": [{"user_id": "1001", "weeks": [1, 2]}],
+        "nicknames": {"1001": "유저1"},
     }
-
-    mock_thread = MagicMock()
-    mock_thread.send = AsyncMock()
-
     mock_first_message = MagicMock()
-    mock_first_message.create_thread = AsyncMock(return_value=mock_thread)
-
+    mock_first_message.create_thread = AsyncMock()
     mock_interaction.followup.send = AsyncMock(return_value=mock_first_message)
 
-    # Act
     with patch("app.commands.db") as mock_db:
-        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
-
+        mock_db.get_attendance_overview_for_user_ids = AsyncMock(
+            return_value=mock_overview
+        )
         await dao_admin_command.callback(
-            mock_interaction, action="weekly_summary", generation=6
+            mock_interaction, action="weekly_summary", generation=7
         )
 
-    # Assert
-    mock_interaction.followup.send.assert_called_once()
-
-    if mock_first_message.create_thread.called:
-        mock_first_message.create_thread.assert_called_once()
-        thread_name = mock_first_message.create_thread.call_args[1]["name"]
-        assert thread_name == "6기 출석 현황"
-        assert mock_thread.send.call_count > 0
+    mock_db.get_attendance_overview_for_user_ids.assert_awaited_once_with(["1001"])
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "7기 — 1~2주차 출석 현황" in sent_message
+    assert "1. 유저1 — 2회" in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_handle_duplicate_nicknames_with_sub_numbering_when_weekly_summary(
-    mock_interaction, dao_admin_command
+async def test_official_crew_attendance_summary_success(
+    dao_admin_command, mock_interaction, mock_guild
 ):
-    """Test weekly_summary handles duplicate nicknames with sub-numbering."""
-    # Arrange
+    member = _make_member(
+        2001,
+        name="crew1",
+        display_name="크루1",
+        role_ids=[settings.official_crew_role_id],
+    )
+    mock_guild.get_role.return_value = _make_role(
+        "정식크루", settings.official_crew_role_id, [member]
+    )
+    mock_interaction.guild = mock_guild
+
     mock_overview = {
-        "generation": 6,
-        "up_to_week": 2,
+        "up_to_week": 3,
         "weekly_counts": [
-            {"week": 1, "count": 3},
-            {"week": 2, "count": 2},
+            {"week": 1, "count": 1},
+            {"week": 2, "count": 0},
+            {"week": 3, "count": 1},
         ],
-        "total_attendance": 5,
-        "unique_participants": 4,
-        "overall_rate": 62.5,
-        "participants": [
-            {"user_id": "1", "weeks": [1, 2]},
-            {"user_id": "2", "weeks": [1]},
-            {"user_id": "3", "weeks": [1, 2]},
-            {"user_id": "4", "weeks": [2]},
-        ],
-        "nicknames": {
-            "1": "Alice",
-            "2": "Alice",
-            "3": "Bob",
-            "4": "Bob",
-        },
+        "total_attendance": 2,
+        "unique_participants": 1,
+        "overall_rate": 66.7,
+        "participants": [{"user_id": "2001", "weeks": [1, 3]}],
+        "nicknames": {"2001": "크루1"},
     }
 
-    # Act
     with patch("app.commands.db") as mock_db:
-        mock_db.get_attendance_overview = AsyncMock(return_value=mock_overview)
-
-        await dao_admin_command.callback(
-            mock_interaction, action="weekly_summary", generation=6
+        mock_db.get_attendance_overview_for_user_ids = AsyncMock(
+            return_value=mock_overview
         )
-
-    # Assert
-    message = mock_interaction.followup.send.call_args[0][0]
-    assert "1-1. Alice" in message or "1. Alice" in message
-    assert "1-2. Alice" in message or "2. Alice" in message
-    assert "Bob" in message
-
-
-# ============================================================================
-# Point Grant/Deduct Tests
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_should_grant_points_successfully_when_valid_admin_and_target(
-    point_operation_setup, dao_admin_command
-):
-    """Test successful point grant."""
-    # Arrange
-    setup = point_operation_setup
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_or_create_user = AsyncMock()
-        mock_db.get_user_points = AsyncMock(side_effect=[100, 200])
-        mock_db.add_transaction = AsyncMock()
-
         await dao_admin_command.callback(
-            setup["interaction"],
-            action="grant_points",
+            mock_interaction,
+            action="official_crew_attendance_summary",
             generation=None,
-            target=setup["target_user"],
-            amount=100,
-            reason="이벤트 참여 보상",
         )
 
-    # Assert
-    setup["interaction"].response.defer.assert_called_once()
-    mock_db.get_or_create_user.assert_called_once()
-    mock_db.add_transaction.assert_called_once()
-
-    transaction_call = mock_db.add_transaction.call_args[0][0]
-    assert transaction_call.user_id == str(setup["target_user"].id)
-    assert transaction_call.points == 100
-    assert transaction_call.reason == "관리자지급"
-    assert transaction_call.admin_id == str(setup["admin"].id)
-    assert "이벤트 참여 보상" in transaction_call.admin_note
-
-    sent_message = setup["interaction"].followup.send.call_args[0][0]
-    assert "💰" in sent_message
-    assert "포인트 지급 완료" in sent_message
-    assert "200" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_deduct_points_successfully_when_sufficient_balance(
-    point_operation_setup, dao_admin_command
-):
-    """Test successful point deduction."""
-    # Arrange
-    setup = point_operation_setup
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_or_create_user = AsyncMock()
-        mock_db.get_user_points = AsyncMock(side_effect=[100, 50])
-        mock_db.add_transaction = AsyncMock()
-
-        await dao_admin_command.callback(
-            setup["interaction"],
-            action="deduct_points",
-            generation=None,
-            target=setup["target_user"],
-            amount=50,
-            reason="규정 위반",
-        )
-
-    # Assert
-    transaction_call = mock_db.add_transaction.call_args[0][0]
-    assert transaction_call.points == -50
-    assert transaction_call.reason == "관리자회수"
-    assert "규정 위반" in transaction_call.admin_note
-
-    sent_message = setup["interaction"].followup.send.call_args[0][0]
-    assert "📤" in sent_message
-    assert "포인트 회수 완료" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_fail_to_deduct_points_when_insufficient_balance(
-    point_operation_setup, dao_admin_command
-):
-    """Test point deduction with insufficient balance."""
-    # Arrange
-    setup = point_operation_setup
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_or_create_user = AsyncMock()
-        mock_db.get_user_points = AsyncMock(return_value=30)
-        mock_db.add_transaction = AsyncMock()
-
-        await dao_admin_command.callback(
-            setup["interaction"],
-            action="deduct_points",
-            generation=None,
-            target=setup["target_user"],
-            amount=50,
-            reason="테스트",
-        )
-
-    # Assert
-    mock_db.add_transaction.assert_not_called()
-
-    sent_message = setup["interaction"].followup.send.call_args[0][0]
-    assert "❌ 포인트 회수 실패" in sent_message
-    assert "30" in sent_message
-    assert "0 미만이 될 수 없습니다" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_reject_when_user_has_no_admin_role(
-    mock_interaction, mock_guild, mock_target_user, dao_admin_command
-):
-    """Test point grant without admin role."""
-    # Arrange
-    non_admin_member = MagicMock(spec=Member)
-    non_admin_member.id = 111111111
-    non_admin_member.roles = []
-
-    mock_interaction.guild = mock_guild
-    mock_interaction.user = MagicMock()
-    mock_interaction.user.id = non_admin_member.id
-    mock_guild.get_member = MagicMock(return_value=non_admin_member)
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction,
-        action="grant_points",
-        generation=None,
-        target=mock_target_user,
-        amount=100,
-        reason="테스트",
-    )
-
-    # Assert
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "❌ 관리자 권한이 필요합니다" in sent_message
+    assert "정식크루 출석 현황 요약" in sent_message
+    assert "1~3주차" in sent_message
+    assert "고유 인원: 1명" in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_reject_when_required_parameters_are_missing(
-    admin_interaction_setup, dao_admin_command
+async def test_official_crew_attendance_summary_no_history(
+    dao_admin_command, mock_interaction, mock_guild
 ):
-    """Test point grant with missing parameters."""
-    # Arrange
-    setup = admin_interaction_setup
-
-    # Act
-    await dao_admin_command.callback(
-        setup["interaction"],
-        action="grant_points",
-        generation=None,
-        target=None,
-        amount=100,
-        reason="테스트",
+    member = _make_member(
+        2001,
+        name="crew1",
+        display_name="크루1",
+        role_ids=[settings.official_crew_role_id],
     )
-
-    # Assert
-    sent_message = setup["interaction"].followup.send.call_args[0][0]
-    assert "❌" in sent_message
-    assert "누락" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_reject_when_amount_is_zero_or_negative(
-    admin_interaction_setup, mock_target_user, dao_admin_command
-):
-    """Test point grant with invalid amount (zero or negative)."""
-    # Arrange
-    setup = admin_interaction_setup
-
-    # Act
-    await dao_admin_command.callback(
-        setup["interaction"],
-        action="grant_points",
-        generation=None,
-        target=mock_target_user,
-        amount=0,
-        reason="테스트",
+    mock_guild.get_role.return_value = _make_role(
+        "정식크루", settings.official_crew_role_id, [member]
     )
-
-    # Assert
-    sent_message = setup["interaction"].followup.send.call_args[0][0]
-    assert "❌ 포인트 수량은 양수여야 합니다" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_return_error_when_guild_info_unavailable(
-    mock_interaction, mock_target_user, dao_admin_command
-):
-    """Test point grant when guild is None."""
-    # Arrange
-    mock_interaction.guild = None
-
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction,
-        action="grant_points",
-        generation=None,
-        target=mock_target_user,
-        amount=100,
-        reason="테스트",
-    )
-
-    # Assert
-    sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "❌ 길드 멤버 정보를 가져올 수 없습니다" in sent_message
-
-
-# ============================================================================
-# Generation 6 Points Summary Tests
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_should_show_gen6_points_summary_successfully_when_users_exist(
-    mock_interaction, mock_guild, dao_admin_command
-):
-    """Test successful generation 6 points summary."""
-    # Arrange
     mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
 
-    mock_role = MagicMock()
-    mock_role.name = "6기"
-    mock_role.id = settings.generation_6_role_id
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_attendance_overview_for_user_ids = AsyncMock(
+            return_value={
+                "up_to_week": 0,
+                "weekly_counts": [],
+                "total_attendance": 0,
+                "unique_participants": 1,
+                "overall_rate": 0.0,
+                "participants": [{"user_id": "2001", "weeks": []}],
+                "nicknames": {"2001": "크루1"},
+            }
+        )
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="official_crew_attendance_summary",
+            generation=None,
+        )
 
-    mock_members = []
-    for i in range(1, 4):
-        member = MagicMock(spec=Member)
-        member.id = int(f"11111111{i}")
-        mock_members.append(member)
+    sent_message = mock_interaction.followup.send.call_args[0][0]
+    assert "정식크루 출석 데이터가 없습니다" in sent_message
 
-    mock_role.members = mock_members
-    mock_guild.get_role.return_value = mock_role
 
-    mock_users = [
+@pytest.mark.asyncio
+async def test_gen7_points_summary_success(
+    dao_admin_command, mock_interaction, mock_guild
+):
+    member = _make_member(
+        111111111,
+        name="user1",
+        display_name="유저1",
+        role_ids=[settings.generation_7_role_id],
+    )
+    mock_guild.get_role.return_value = _make_role(
+        "7기", settings.generation_7_role_id, [member]
+    )
+    mock_interaction.guild = mock_guild
+
+    mock_user_docs = [
         {
             "discord_id": "111111111",
             "username": "user1",
@@ -573,300 +285,201 @@ async def test_should_show_gen6_points_summary_successfully_when_users_exist(
             "total_points": 1500,
         },
         {
-            "discord_id": "111111112",
+            "discord_id": "999999999",
             "username": "user2",
             "nickname": "유저2",
-            "total_points": 1200,
-        },
-        {
-            "discord_id": "111111113",
-            "username": "user3",
-            "nickname": "유저3",
-            "total_points": 900,
+            "total_points": 300,
         },
     ]
 
-    # Act
     with patch("app.commands.db") as mock_db:
-        mock_db.get_generation_points = AsyncMock(return_value=mock_users)
+        mock_db.users_collection.find.return_value = mock_user_docs
 
         await dao_admin_command.callback(
             mock_interaction,
-            action="gen6_points_summary",
+            action="gen7_points_summary",
             generation=None,
             target=None,
             amount=None,
             reason=None,
         )
 
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_db.get_generation_points.assert_called_once_with(6)
-    mock_interaction.followup.send.assert_called_once()
-
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "6기 포인트 집계" in sent_message
-    assert "총 3명" in sent_message
+    assert "7기 포인트 집계" in sent_message
+    assert "총 1명" in sent_message
     assert "유저1" in sent_message
-    assert "1,500" in sent_message
-    assert "유저2" in sent_message
-    assert "1,200" in sent_message
-    assert "유저3" in sent_message
-    assert "900" in sent_message
-    assert "순번" in sent_message
-    assert "닉네임" in sent_message
-    assert "유저명" in sent_message
-    assert "포인트" in sent_message
-    assert "@user1" in sent_message
-    assert "@user2" in sent_message
-    assert "@user3" in sent_message
-    assert "|" in sent_message
+    assert "유저2" not in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_show_info_message_when_no_gen6_users_exist(
-    mock_interaction, mock_guild, dao_admin_command
+async def test_friends_points_summary_excludes_generation7_members(
+    dao_admin_command, mock_interaction, mock_guild
 ):
-    """Test points summary when no users exist."""
-    # Arrange
-    mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
-
-    mock_role = MagicMock()
-    mock_role.name = "6기"
-    mock_role.id = settings.generation_6_role_id
-    mock_role.members = []
-    mock_guild.get_role.return_value = mock_role
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_generation_points = AsyncMock(return_value=[])
-
-        await dao_admin_command.callback(
-            mock_interaction,
-            action="gen6_points_summary",
-            generation=None,
-            target=None,
-            amount=None,
-            reason=None,
-        )
-
-    # Assert
-    sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "ℹ️" in sent_message
-    assert "역할을 가진 멤버가 없습니다" in sent_message
-
-
-@pytest.mark.asyncio
-async def test_should_split_messages_when_gen6_points_summary_exceeds_limit(
-    mock_interaction, mock_guild, dao_admin_command
-):
-    """Test message splitting for large user lists."""
-    # Arrange
-    mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
-
-    mock_role = MagicMock()
-    mock_role.name = "6기"
-    mock_role.id = settings.generation_6_role_id
-    mock_members = []
-    for i in range(100):
-        member = MagicMock(spec=Member)
-        member.id = 1000000000 + i
-        mock_members.append(member)
-    mock_role.members = mock_members
-    mock_guild.get_role.return_value = mock_role
-
-    many_users = []
-    for i in range(100):
-        many_users.append(
-            {
-                "discord_id": str(1000000000 + i),
-                "username": f"user{i}",
-                "nickname": f"매우긴닉네임입니다{i}" * 3,
-                "total_points": 10000 - i * 10,
-            }
-        )
-
-    # Act
-    with patch("app.commands.db") as mock_db:
-        mock_db.get_generation_points = AsyncMock(return_value=many_users)
-
-        await dao_admin_command.callback(
-            mock_interaction,
-            action="gen6_points_summary",
-            generation=None,
-            target=None,
-            amount=None,
-            reason=None,
-        )
-
-    # Assert
-    assert mock_interaction.followup.send.call_count >= 1, (
-        "Should send at least one message"
+    friends_only = _make_member(
+        3001,
+        name="friend1",
+        display_name="프렌즈1",
+        role_ids=[settings.friends_role_id],
     )
-
-    for call in mock_interaction.followup.send.call_args_list:
-        message = call[0][0]
-        assert len(message) <= 2000, (
-            f"Message length {len(message)} exceeds 2000 characters"
-        )
-
-
-# ============================================================================
-# Generation 6 Sherpa Points Summary Tests
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_should_show_gen6_sherpa_points_summary_successfully_when_sherpas_exist(
-    mock_interaction, mock_guild, dao_admin_command
-):
-    """Test successful generation 6 Sherpa points summary (role only, not filtered by generation)."""
-    # Arrange
+    overlap_member = _make_member(
+        3002,
+        name="friend2",
+        display_name="겹침유저",
+        role_ids=[settings.friends_role_id, settings.generation_7_role_id],
+    )
+    mock_guild.get_role.return_value = _make_role(
+        "프렌즈", settings.friends_role_id, [friends_only, overlap_member]
+    )
     mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
-
-    mock_role = MagicMock()
-    mock_role.name = "6기 셰르파"
-    mock_role.id = settings.generation_6_sherpa_role_id
-
-    mock_members = []
-    for i in range(1, 4):
-        member = MagicMock(spec=Member)
-        member.id = int(f"55555555{i}")
-        mock_members.append(member)
-
-    mock_role.members = mock_members
-    mock_guild.get_role.return_value = mock_role
 
     mock_user_docs = [
         {
-            "discord_id": "555555551",
-            "username": "sherpa1",
-            "nickname": "셰르파1",
-            "total_points": 2000,
+            "discord_id": "3001",
+            "username": "friend1",
+            "nickname": "프렌즈1",
+            "total_points": 200,
         },
         {
-            "discord_id": "555555552",
-            "username": "sherpa2",
-            "nickname": "셰르파2",
-            "total_points": 1800,
-        },
-        {
-            "discord_id": "555555553",
-            "username": "sherpa3",
-            "nickname": "셰르파3",
-            "total_points": 1600,
-        },
-        {
-            "discord_id": "999999999",
-            "username": "regular_user",
-            "nickname": "일반유저",
-            "total_points": 1400,
+            "discord_id": "3002",
+            "username": "friend2",
+            "nickname": "겹침유저",
+            "total_points": 500,
         },
     ]
 
-    # Act
     with patch("app.commands.db") as mock_db:
-        mock_cursor = MagicMock()
-        mock_cursor.to_list = MagicMock(return_value=mock_user_docs)
-        mock_db.users_collection.find.return_value = mock_cursor
+        mock_db.users_collection.find.return_value = mock_user_docs
 
         await dao_admin_command.callback(
             mock_interaction,
-            action="gen6_sherpa_points_summary",
+            action="friends_points_summary",
             generation=None,
             target=None,
             amount=None,
             reason=None,
         )
 
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_db.users_collection.find.assert_called_once_with({})
-    mock_interaction.followup.send.assert_called_once()
-
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "6기 셰르파 포인트 집계" in sent_message
-    assert "총 3명" in sent_message
-    assert "셰르파1" in sent_message
-    assert "2,000" in sent_message
-    assert "셰르파2" in sent_message
-    assert "1,800" in sent_message
-    assert "셰르파3" in sent_message
-    assert "1,600" in sent_message
-    assert "일반유저" not in sent_message
-    assert "1,400" not in sent_message
-    assert "순번" in sent_message
-    assert "닉네임" in sent_message
-    assert "유저명" in sent_message
-    assert "포인트" in sent_message
-    assert "@sherpa1" in sent_message
-    assert "@sherpa2" in sent_message
-    assert "@sherpa3" in sent_message
-    assert "|" in sent_message
+    assert "프렌즈 포인트 집계" in sent_message
+    assert "프렌즈1" in sent_message
+    assert "겹침유저" not in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_show_info_message_when_no_sherpas_exist(
-    mock_interaction, mock_guild, dao_admin_command
+async def test_grant_points_success(
+    dao_admin_command,
+    mock_interaction,
+    mock_guild,
+    mock_admin_member,
+    mock_target_user,
 ):
-    """Test Sherpa points summary when no Sherpas exist."""
-    # Arrange
+    target_member = _make_member(
+        mock_target_user.id,
+        name=mock_target_user.name,
+        display_name="대상유저",
+        role_ids=[settings.generation_7_role_id],
+    )
     mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
+    mock_interaction.user = SimpleNamespace(id=mock_admin_member.id)
+    mock_guild.get_member.side_effect = lambda uid: {
+        mock_admin_member.id: mock_admin_member,
+        mock_target_user.id: target_member,
+    }.get(uid)
 
-    mock_role = MagicMock()
-    mock_role.name = "6기 셰르파"
-    mock_role.id = settings.generation_6_sherpa_role_id
-    mock_role.members = []
-    mock_guild.get_role.return_value = mock_role
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_or_create_user = AsyncMock()
+        mock_db.get_user_points = AsyncMock(side_effect=[100, 200])
+        mock_db.add_transaction = AsyncMock()
 
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction,
-        action="gen6_sherpa_points_summary",
-        generation=None,
-        target=None,
-        amount=None,
-        reason=None,
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="grant_points",
+            generation=None,
+            target=mock_target_user,
+            amount=100,
+            reason="이벤트 참여 보상",
+        )
+
+    transaction_call = mock_db.add_transaction.call_args[0][0]
+    assert transaction_call.user_id == str(mock_target_user.id)
+    assert transaction_call.points == 100
+    mock_db.get_or_create_user.assert_awaited_once_with(
+        discord_id=str(mock_target_user.id),
+        username=mock_target_user.name,
+        generation=7,
+        nickname="대상유저",
     )
 
-    # Assert
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "ℹ️" in sent_message
-    assert "역할을 가진 멤버가 없습니다" in sent_message
+    assert "포인트 지급 완료" in sent_message
 
 
 @pytest.mark.asyncio
-async def test_should_return_error_when_sherpa_role_not_found(
-    mock_interaction, mock_guild, dao_admin_command
+async def test_grant_points_official_crew_member_keeps_generation_unset(
+    dao_admin_command,
+    mock_interaction,
+    mock_guild,
+    mock_admin_member,
+    mock_target_user,
 ):
-    """Test when Sherpa role is not found."""
-    # Arrange
+    transitioned_target = _make_member(
+        mock_target_user.id,
+        name=mock_target_user.name,
+        display_name="전환대상",
+        role_ids=[settings.generation_7_role_id, settings.official_crew_role_id],
+    )
     mock_interaction.guild = mock_guild
-    mock_guild.chunked = True
-    mock_guild.get_role.return_value = None
+    mock_interaction.user = SimpleNamespace(id=mock_admin_member.id)
+    mock_guild.get_member.side_effect = lambda uid: {
+        mock_admin_member.id: mock_admin_member,
+        mock_target_user.id: transitioned_target,
+    }.get(uid)
 
-    # Act
-    await dao_admin_command.callback(
-        mock_interaction,
-        action="gen6_sherpa_points_summary",
+    with patch("app.commands.db") as mock_db:
+        mock_db.get_or_create_user = AsyncMock()
+        mock_db.get_user_points = AsyncMock(side_effect=[100, 200])
+        mock_db.add_transaction = AsyncMock()
+
+        await dao_admin_command.callback(
+            mock_interaction,
+            action="grant_points",
+            generation=None,
+            target=mock_target_user,
+            amount=100,
+            reason="운영 보정",
+        )
+
+    mock_db.get_or_create_user.assert_awaited_once_with(
+        discord_id=str(mock_target_user.id),
+        username=mock_target_user.name,
         generation=None,
-        target=None,
-        amount=None,
-        reason=None,
+        nickname="전환대상",
     )
 
-    # Assert
-    mock_interaction.response.defer.assert_called_once()
-    mock_guild.get_role.assert_called_once_with(settings.generation_6_sherpa_role_id)
+
+@pytest.mark.asyncio
+async def test_grant_points_no_admin_role(
+    dao_admin_command, mock_interaction, mock_guild, mock_target_user
+):
+    non_admin_member = _make_member(
+        111111111,
+        name="non_admin",
+        display_name="일반유저",
+        role_ids=[],
+        administrator=False,
+    )
+    mock_interaction.guild = mock_guild
+    mock_interaction.user = SimpleNamespace(id=non_admin_member.id)
+    mock_guild.get_member.return_value = non_admin_member
+
+    await dao_admin_command.callback(
+        mock_interaction,
+        action="grant_points",
+        generation=None,
+        target=mock_target_user,
+        amount=100,
+        reason="테스트",
+    )
 
     sent_message = mock_interaction.followup.send.call_args[0][0]
-    assert "❌ 역할 ID" in sent_message
-    assert "찾을 수 없습니다" in sent_message
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    assert "❌ 관리자 권한이 필요합니다" in sent_message
