@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import discord
 from discord.ext import commands
 
@@ -8,6 +10,10 @@ from app.settings import settings
 from app.models import Transaction
 from app.filters import is_test_like_name
 from app.roles import has_role, is_admin
+
+
+ATTENDANCE_THREAD_NAME_RE = re.compile(r"(\d+)\s*주차")
+ATTENDANCE_START_COMMAND_RE = re.compile(r"^\s*(\d+)\s*주차\s*출석\s*시작\s*$")
 
 
 def _build_intents() -> discord.Intents:
@@ -60,6 +66,49 @@ class DaoBot(commands.Bot):
         assert self.user is not None
         print(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
+
+    def _extract_attendance_week(self, text: str) -> int | None:
+        match = ATTENDANCE_THREAD_NAME_RE.search(text)
+        if match is None:
+            return None
+        return int(match.group(1))
+
+    def _extract_attendance_start_week(self, text: str) -> int | None:
+        match = ATTENDANCE_START_COMMAND_RE.fullmatch(text.strip())
+        if match is None:
+            return None
+        return int(match.group(1))
+
+    async def _get_member(
+        self, guild: discord.Guild | None, member_id: int | None
+    ) -> discord.Member | None:
+        if guild is None or member_id is None:
+            return None
+
+        member = guild.get_member(member_id)
+        if member is not None:
+            return member
+
+        try:
+            return await guild.fetch_member(member_id)
+        except Exception:
+            return None
+
+    async def _get_attendance_starter_message(
+        self, thread: discord.Thread
+    ) -> discord.Message | None:
+        starter_message = thread.starter_message
+        if starter_message is not None:
+            return starter_message
+
+        parent = thread.parent
+        if parent is None or not hasattr(parent, "fetch_message"):
+            return None
+
+        try:
+            return await parent.fetch_message(thread.id)
+        except Exception:
+            return None
 
     async def _publish_transaction(self, tx: Transaction) -> None:
         """Publish a transaction to the configured channel, skipping test data."""
@@ -172,17 +221,71 @@ class DaoBot(commands.Bot):
     async def _can_start_attendance_thread(
         self, guild: discord.Guild | None, owner_id: int | None
     ) -> bool:
-        if guild is None or owner_id is None:
+        member = await self._get_member(guild, owner_id)
+        if member is None:
+            return False
+        return is_admin(member) or has_role(member, settings.generation_7_role_id)
+
+    async def _is_eligible_attendance_thread(
+        self, thread: discord.Thread, guild: discord.Guild | None = None
+    ) -> bool:
+        guild = guild or thread.guild
+        if guild is None:
             return False
 
-        member = guild.get_member(owner_id)
-        if member is None:
-            try:
-                member = await guild.fetch_member(owner_id)
-            except Exception:
-                return False
+        if await self._can_start_attendance_thread(
+            guild, getattr(thread, "owner_id", None)
+        ):
+            return True
 
-        return is_admin(member) or has_role(member, settings.generation_7_role_id)
+        starter_message = await self._get_attendance_starter_message(thread)
+        if starter_message is None:
+            return False
+
+        start_week = self._extract_attendance_start_week(starter_message.content)
+        thread_week = self._extract_attendance_week(thread.name)
+        if start_week is None or thread_week != start_week:
+            return False
+
+        starter_member = await self._get_member(
+            guild, getattr(starter_message.author, "id", None)
+        )
+        if starter_member is None:
+            return False
+
+        return is_admin(starter_member) or has_role(
+            starter_member, settings.generation_7_role_id
+        )
+
+    async def on_message(self, message: discord.Message) -> None:
+        try:
+            if message.author.bot or message.guild is None:
+                return
+
+            week = self._extract_attendance_start_week(message.content)
+            if week is None:
+                return
+
+            if not isinstance(message.channel, discord.TextChannel):
+                return
+
+            member = await self._get_member(message.guild, message.author.id)
+            if member is None:
+                return
+
+            if not (
+                is_admin(member) or has_role(member, settings.generation_7_role_id)
+            ):
+                return
+
+            await message.create_thread(
+                name=f"{week}주차",
+                reason=f"Attendance thread started by {message.author.id}",
+            )
+        except Exception as e:
+            print(f"on_message attendance thread create error: {e}")
+        finally:
+            await self.process_commands(message)
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -223,9 +326,7 @@ class DaoBot(commands.Bot):
             if not isinstance(channel, discord.Thread):
                 return
 
-            if not await self._can_start_attendance_thread(
-                guild, getattr(channel, "owner_id", None)
-            ):
+            if not await self._is_eligible_attendance_thread(channel, guild):
                 return
 
             # Ensure the bot can access the thread (especially for private threads)
@@ -250,13 +351,10 @@ class DaoBot(commands.Bot):
                     return
 
             # Parse pattern like "6주차" (day is ignored for attendance purposes)
-            import re
-
             # Extract week number from the thread name
-            m = re.search(r"(\d+)\s*주차", channel.name)
-            if not m:
+            week = self._extract_attendance_week(channel.name)
+            if week is None:
                 return
-            week = int(m.group(1))
             day = 1  # 일 단위는 미사용. 고정값으로 처리하여 주차 단위 출석만 인정
             generation = settings.attendance_generation
 
@@ -304,19 +402,13 @@ class DaoBot(commands.Bot):
             if guild is None:
                 return
 
-            if not await self._can_start_attendance_thread(
-                guild, getattr(thread, "owner_id", None)
-            ):
+            if not await self._is_eligible_attendance_thread(thread):
                 return
 
             # Check thread name pattern like "6주차"
-            import re
-
-            m = re.search(r"(\d+)\s*주차", thread.name)
-            if not m:
+            week = self._extract_attendance_week(thread.name)
+            if week is None:
                 return
-
-            week = int(m.group(1))
 
             # Try to join the thread (for private threads) and send a notice
             try:
